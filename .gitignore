@@ -5,6 +5,10 @@
 
 # testing
 /coverage
+/test-results/
+/playwright-report/
+/blob-report/
+/e2e/**/*-win32.png
 
 # next.js
 /.next/
@@ -27,4 +31,3 @@ yarn-error.log*
 *.pem
 *.tsbuildinfo
 next-env.d.ts
-

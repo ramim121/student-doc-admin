@@ -1,8 +1,8 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useCallback, useState, useEffect } from 'react';
 import { supabase } from '@/lib/supabase';
-import { Building2, GitMerge, Check, AlertCircle, Edit3, Loader2, XCircle, Search } from 'lucide-react';
+import { Building2, GitMerge, Check, AlertCircle, ChevronLeft, ChevronRight, Edit3, Loader2, XCircle, Search } from 'lucide-react';
 
 interface University {
   id: string;
@@ -24,11 +24,16 @@ export default function UniversitiesAdminPage() {
   const [universities, setUniversities] = useState<University[]>([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState<'all' | 'custom_pending' | 'official'>('all');
+  const [queryInput, setQueryInput] = useState('');
   const [query, setQuery] = useState('');
+  const [page, setPage] = useState(1);
+  const [total, setTotal] = useState(0);
   
   // Merge dialog state
   const [sourceUni, setSourceUni] = useState<University | null>(null);
   const [targetUniId, setTargetUniId] = useState('');
+  const [targetQuery, setTargetQuery] = useState('');
+  const [mergeTargets, setMergeTargets] = useState<University[]>([]);
   const [merging, setMerging] = useState(false);
   const [preflight, setPreflight] = useState<UniversityMergePreflight | null>(null);
   const [preflightLoading, setPreflightLoading] = useState(false);
@@ -41,10 +46,6 @@ export default function UniversitiesAdminPage() {
   const [editShort, setEditShort] = useState('');
   const [editStatus, setEditStatus] = useState<'official' | 'custom_pending'>('official');
   const [saving, setSaving] = useState(false);
-
-  useEffect(() => {
-    loadUniversities();
-  }, []);
 
   useEffect(() => {
     let active = true;
@@ -72,19 +73,63 @@ export default function UniversitiesAdminPage() {
     return () => { active = false; };
   }, [sourceUni, targetUniId]);
 
-  const loadUniversities = async () => {
+  useEffect(() => {
+    if (!sourceUni) {
+      setMergeTargets([]);
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      const normalized = targetQuery.trim().replace(/[%_,()]/g, ' ');
+      let targetLookup = supabase
+        .from('universities')
+        .select('id, name, short, country, status, created_at')
+        .eq('status', 'official')
+        .neq('id', sourceUni.id);
+      if (normalized) targetLookup = targetLookup.or(`name.ilike.%${normalized}%,short.ilike.%${normalized}%`);
+      void targetLookup.order('name').limit(50).then(({ data, error: lookupError }) => {
+        if (lookupError) setError(`Merge targets could not be loaded: ${lookupError.message}`);
+        else setMergeTargets((data ?? []) as University[]);
+      });
+    }, 250);
+    return () => window.clearTimeout(timer);
+  }, [sourceUni, targetQuery]);
+
+  const pageSize = 25;
+  const totalPages = total ? Math.ceil(total / pageSize) : 0;
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      setQuery(queryInput.trim().replace(/[%_,()]/g, ' '));
+      setPage(1);
+    }, 350);
+    return () => window.clearTimeout(timer);
+  }, [queryInput]);
+
+  const loadUniversities = useCallback(async () => {
     setLoading(true);
-    const { data, error } = await supabase
+    let universityQuery = supabase
       .from('universities')
-      .select('id, name, short, country, status, created_at')
+      .select('id, name, short, country, status, created_at', { count: 'exact' });
+    if (filter !== 'all') universityQuery = universityQuery.eq('status', filter);
+    if (query) universityQuery = universityQuery.or(`name.ilike.%${query}%,short.ilike.%${query}%,country.ilike.%${query}%`);
+    const from = (page - 1) * pageSize;
+    const { data, count, error } = await universityQuery
       .order('name')
-      .limit(500);
+      .range(from, from + pageSize - 1);
     if (error) {
       setError(`Universities could not be loaded: ${error.message}`);
       setUniversities([]);
-    } else if (data) setUniversities(data as University[]);
+      setTotal(0);
+    } else if (data) {
+      setUniversities(data as University[]);
+      setTotal(count ?? 0);
+    }
     setLoading(false);
-  };
+  }, [filter, page, query]);
+
+  useEffect(() => {
+    void loadUniversities();
+  }, [loadUniversities]);
 
   const handleExecuteMerge = async () => {
     if (!sourceUni || !targetUniId || !preflight) return;
@@ -103,6 +148,7 @@ export default function UniversitiesAdminPage() {
       setMessage(`Successfully merged "${sourceUni.name}" into target university! All associated courses, documents, and profiles were re-linked.`);
       setSourceUni(null);
       setTargetUniId('');
+      setTargetQuery('');
       setPreflight(null);
       await loadUniversities();
     } catch (err: any) {
@@ -155,18 +201,6 @@ export default function UniversitiesAdminPage() {
     }
   };
 
-  const filteredUnis = universities.filter((u) => {
-    if (filter === 'custom_pending') return u.status === 'custom_pending';
-    if (filter === 'official') return u.status === 'official';
-    const normalized = query.trim().toLowerCase();
-    return !normalized || [u.name, u.short, u.country].some((value) => value.toLowerCase().includes(normalized));
-  });
-
-  const visibleUnis = filteredUnis.filter((u) => {
-    const normalized = query.trim().toLowerCase();
-    return !normalized || [u.name, u.short, u.country].some((value) => value.toLowerCase().includes(normalized));
-  });
-
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
@@ -178,22 +212,22 @@ export default function UniversitiesAdminPage() {
         </div>
         <div className="flex rounded-xl bg-slate-900 p-1 border border-slate-800 text-xs">
           <button
-            onClick={() => setFilter('all')}
+            onClick={() => { setFilter('all'); setPage(1); }}
             className={`px-3 py-1.5 rounded-lg font-medium transition-colors ${filter === 'all' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-white'}`}
           >
-            All ({universities.length})
+            All
           </button>
           <button
-            onClick={() => setFilter('custom_pending')}
+            onClick={() => { setFilter('custom_pending'); setPage(1); }}
             className={`px-3 py-1.5 rounded-lg font-medium transition-colors ${filter === 'custom_pending' ? 'bg-amber-600 text-white' : 'text-slate-400 hover:text-white'}`}
           >
-            Pending Review ({universities.filter((u) => u.status === 'custom_pending').length})
+            Pending Review
           </button>
           <button
-            onClick={() => setFilter('official')}
+            onClick={() => { setFilter('official'); setPage(1); }}
             className={`px-3 py-1.5 rounded-lg font-medium transition-colors ${filter === 'official' ? 'bg-emerald-600 text-white' : 'text-slate-400 hover:text-white'}`}
           >
-            Official ({universities.filter((u) => u.status === 'official').length})
+            Official
           </button>
         </div>
       </div>
@@ -214,7 +248,7 @@ export default function UniversitiesAdminPage() {
 
       <label className="relative block max-w-xl">
         <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
-        <input value={query} onChange={(event) => setQuery(event.target.value)} type="search" placeholder="Search name, abbreviation, or country" className="h-10 w-full rounded-xl border border-slate-700 bg-slate-950 pl-10 pr-4 text-sm text-white outline-none focus:border-indigo-500" />
+        <input value={queryInput} onChange={(event) => setQueryInput(event.target.value)} type="search" placeholder="Search name, abbreviation, or country" className="h-10 w-full rounded-xl border border-slate-700 bg-slate-950 pl-10 pr-4 text-sm text-white outline-none focus:border-indigo-500" />
       </label>
 
       {/* Universities Table */}
@@ -236,14 +270,14 @@ export default function UniversitiesAdminPage() {
                   Loading universities...
                 </td>
               </tr>
-            ) : visibleUnis.length === 0 ? (
+            ) : universities.length === 0 ? (
               <tr>
                 <td colSpan={4} className="px-6 py-8 text-center text-slate-500">
                   No universities matching filter.
                 </td>
               </tr>
             ) : (
-              visibleUnis.map((u) => (
+              universities.map((u) => (
                 <tr key={u.id} className="hover:bg-slate-900/40 transition-colors">
                   <td className="px-6 py-4 font-semibold text-white">
                     <div className="flex items-center gap-2">
@@ -277,7 +311,7 @@ export default function UniversitiesAdminPage() {
                       Edit
                     </button>
                     <button
-                      onClick={() => setSourceUni(u)}
+                      onClick={() => { setSourceUni(u); setTargetQuery(''); }}
                       className="inline-flex items-center gap-1 rounded-lg border border-indigo-700/50 bg-indigo-950/40 px-3 py-1.5 text-xs font-medium text-indigo-300 hover:bg-indigo-900/60"
                     >
                       <GitMerge className="h-3.5 w-3.5" />
@@ -298,6 +332,10 @@ export default function UniversitiesAdminPage() {
           </tbody>
         </table>
       </div>
+      <div className="flex flex-col items-center justify-between gap-3 text-xs text-slate-500 sm:flex-row">
+        <p>Showing {universities.length} of {total} matching universities.</p>
+        {totalPages > 1 && <nav className="flex items-center gap-3" aria-label="University pages"><button disabled={page <= 1} onClick={() => setPage((value) => Math.max(1, value - 1))} className="inline-flex items-center rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 disabled:opacity-40"><ChevronLeft className="mr-1 h-4 w-4" />Previous</button><span>Page {page} of {totalPages}</span><button disabled={page >= totalPages} onClick={() => setPage((value) => value + 1)} className="inline-flex items-center rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 disabled:opacity-40">Next<ChevronRight className="ml-1 h-4 w-4" /></button></nav>}
+      </div>
 
       {/* Merge Modal Dialog */}
       {sourceUni && (
@@ -314,15 +352,14 @@ export default function UniversitiesAdminPage() {
             <div className="mt-5 space-y-4">
               <div>
                 <label className="text-xs font-semibold text-slate-300">Target Official University</label>
+                <input value={targetQuery} onChange={(event) => { setTargetQuery(event.target.value); setTargetUniId(''); }} type="search" placeholder="Search official university targets" className="mt-1 w-full rounded-xl border border-slate-700 bg-slate-950 px-4 py-2.5 text-sm text-white focus:border-indigo-500 focus:outline-none" />
                 <select
                   value={targetUniId}
                   onChange={(e) => setTargetUniId(e.target.value)}
-                  className="mt-1 w-full rounded-xl border border-slate-700 bg-slate-950 px-4 py-2.5 text-sm text-white focus:border-indigo-500 focus:outline-none"
+                  className="mt-2 w-full rounded-xl border border-slate-700 bg-slate-950 px-4 py-2.5 text-sm text-white focus:border-indigo-500 focus:outline-none"
                 >
                   <option value="">Select target university...</option>
-                  {universities
-                    .filter((u) => u.id !== sourceUni.id && u.status === 'official')
-                    .map((u) => (
+                  {mergeTargets.map((u) => (
                       <option key={u.id} value={u.id}>
                         {u.name} ({u.short}) {u.status === 'official' ? '✔ Official' : ''}
                       </option>
@@ -356,7 +393,7 @@ export default function UniversitiesAdminPage() {
 
             <div className="mt-6 flex justify-end gap-3">
               <button
-                onClick={() => { setSourceUni(null); setTargetUniId(''); setPreflight(null); }}
+                onClick={() => { setSourceUni(null); setTargetUniId(''); setTargetQuery(''); setPreflight(null); }}
                 className="rounded-xl px-4 py-2 text-sm font-medium text-slate-400 hover:bg-slate-800"
               >
                 Cancel

@@ -115,6 +115,8 @@ Run locally:
 npm ci
 npm run typecheck
 npm run lint
+npm test
+npm run test:e2e
 npm run build
 npm run dev
 ```
@@ -140,6 +142,9 @@ identities:
 - [ ] Merge operations are atomic and write audit events.
 - [ ] Resource approval/rejection changes Public App visibility correctly.
 - [ ] Resource deletion handles both database state and R2 cleanup/retry.
+- [ ] University, course, resource, and user lists paginate without loading an unbounded table.
+- [ ] Account deletion requires a reason plus typed confirmation, schedules the recovery hold, and appears in Operations.
+- [ ] Reactivating a logically deleted user during the hold cancels scheduled erasure.
 - [ ] Admin actions never expose service-role or R2 credentials to the browser.
 - [ ] Server logs contain no JWTs, signed URLs, reset tokens, or secrets.
 

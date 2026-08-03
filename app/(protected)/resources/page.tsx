@@ -1,9 +1,11 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import {
   AlertCircle,
   Check,
+  ChevronLeft,
+  ChevronRight,
   Download,
   ExternalLink,
   EyeOff,
@@ -63,29 +65,56 @@ export default function ResourceModerationAdminPage() {
   const [loading, setLoading] = useState(true);
   const [busyId, setBusyId] = useState('');
   const [statusFilter, setStatusFilter] = useState<ResourceStatus | 'all'>('pending');
+  const [fileTypeFilter, setFileTypeFilter] = useState('all');
+  const [dateFilter, setDateFilter] = useState('all');
+  const [queryInput, setQueryInput] = useState('');
   const [query, setQuery] = useState('');
+  const [page, setPage] = useState(1);
+  const [total, setTotal] = useState(0);
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
   const portalUrl = process.env.NEXT_PUBLIC_PORTAL_URL || 'http://localhost:3000';
+  const pageSize = 25;
+  const totalPages = total ? Math.ceil(total / pageSize) : 0;
 
-  const loadResources = async () => {
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      setQuery(queryInput.trim().replace(/[%_,()]/g, ' '));
+      setPage(1);
+    }, 350);
+    return () => window.clearTimeout(timer);
+  }, [queryInput]);
+
+  const loadResources = useCallback(async () => {
     setLoading(true);
     setError('');
-    const { data, error: queryError } = await supabase
+    let resourceQuery = supabase
       .from('resources')
       .select(`
         id, title, description, file_type, mime_type, size_bytes,
         storage_provider, storage_key, ai_summary, ai_status, status,
         featured, moderation_reason, created_at,
         profiles(full_name), universities(name), courses(code, title)
-      `)
+      `, { count: 'exact' });
+    if (statusFilter !== 'all') resourceQuery = resourceQuery.eq('status', statusFilter);
+    if (fileTypeFilter !== 'all') resourceQuery = resourceQuery.eq('file_type', fileTypeFilter);
+    if (query) resourceQuery = resourceQuery.or(`title.ilike.%${query}%,description.ilike.%${query}%`);
+    if (dateFilter !== 'all') {
+      const days = Number(dateFilter);
+      const since = new Date(Date.now() - days * 86_400_000).toISOString();
+      resourceQuery = resourceQuery.gte('created_at', since);
+    }
+    const from = (page - 1) * pageSize;
+    const { data, count, error: queryError } = await resourceQuery
       .order('created_at', { ascending: false })
-      .limit(100);
+      .range(from, from + pageSize - 1);
 
     if (queryError) {
       setError(`Resources could not be loaded: ${queryError.message}`);
       setResources([]);
+      setTotal(0);
     } else {
+      setTotal(count ?? 0);
       setResources(
         (data ?? []).map((row) => {
           const courseCode = relationText(row.courses as RelationValue, 'code', 'No course');
@@ -113,21 +142,11 @@ export default function ResourceModerationAdminPage() {
       );
     }
     setLoading(false);
-  };
+  }, [dateFilter, fileTypeFilter, page, query, statusFilter]);
 
   useEffect(() => {
     void loadResources();
-  }, []);
-
-  const filteredResources = useMemo(() => {
-    const normalizedQuery = query.trim().toLowerCase();
-    return resources.filter((resource) => {
-      if (statusFilter !== 'all' && resource.status !== statusFilter) return false;
-      if (!normalizedQuery) return true;
-      return [resource.title, resource.uploader, resource.university, resource.course, resource.file_type]
-        .some((value) => value.toLowerCase().includes(normalizedQuery));
-    });
-  }, [query, resources, statusFilter]);
+  }, [loadResources]);
 
   const moderate = async (
     resource: ResourceItem,
@@ -217,9 +236,9 @@ export default function ResourceModerationAdminPage() {
           <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
           <input
             type="search"
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            placeholder="Search title, uploader, university, course, or file type"
+            value={queryInput}
+            onChange={(event) => setQueryInput(event.target.value)}
+            placeholder="Search title or description"
             aria-label="Search moderation queue"
             className="h-10 w-full rounded-xl border border-slate-700 bg-slate-950 pl-10 pr-4 text-sm text-white outline-none focus:border-indigo-500"
           />
@@ -228,7 +247,7 @@ export default function ResourceModerationAdminPage() {
           Status
           <select
             value={statusFilter}
-            onChange={(event) => setStatusFilter(event.target.value as ResourceStatus | 'all')}
+            onChange={(event) => { setStatusFilter(event.target.value as ResourceStatus | 'all'); setPage(1); }}
             className="rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white outline-none focus:border-indigo-500"
           >
             <option value="pending">Pending</option>
@@ -236,6 +255,16 @@ export default function ResourceModerationAdminPage() {
             <option value="rejected">Rejected</option>
             <option value="removed">Removed</option>
             <option value="all">All statuses</option>
+          </select>
+        </label>
+        <label className="flex items-center gap-2 text-sm text-slate-400">File
+          <select value={fileTypeFilter} onChange={(event) => { setFileTypeFilter(event.target.value); setPage(1); }} className="rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white outline-none focus:border-indigo-500">
+            <option value="all">All types</option><option value="pdf">PDF</option><option value="docx">DOCX</option><option value="pptx">PPTX</option><option value="xlsx">XLSX</option><option value="txt">TXT</option>
+          </select>
+        </label>
+        <label className="flex items-center gap-2 text-sm text-slate-400">Uploaded
+          <select value={dateFilter} onChange={(event) => { setDateFilter(event.target.value); setPage(1); }} className="rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white outline-none focus:border-indigo-500">
+            <option value="all">Any time</option><option value="1">Last 24 hours</option><option value="7">Last 7 days</option><option value="30">Last 30 days</option><option value="365">Last year</option>
           </select>
         </label>
       </div>
@@ -254,9 +283,9 @@ export default function ResourceModerationAdminPage() {
           <tbody className="divide-y divide-slate-800/60">
             {loading ? (
               <tr><td colSpan={5} className="px-6 py-12 text-center text-slate-500"><Loader2 className="mx-auto h-6 w-6 animate-spin text-emerald-400" /><span className="mt-2 block">Loading moderation queue…</span></td></tr>
-            ) : filteredResources.length === 0 ? (
+            ) : resources.length === 0 ? (
               <tr><td colSpan={5} className="px-6 py-12 text-center text-slate-500">No resources match the current filters.</td></tr>
-            ) : filteredResources.map((resource) => (
+            ) : resources.map((resource) => (
               <tr key={resource.id} className="align-top transition-colors hover:bg-slate-900/40">
                 <td className="max-w-sm px-5 py-4">
                   <div className="font-semibold text-white">{resource.title}</div>
@@ -311,7 +340,10 @@ export default function ResourceModerationAdminPage() {
           </tbody>
         </table>
       </div>
-      <p className="text-xs text-slate-500">Showing at most the latest 100 resources. All changes are reauthorized and written to the immutable admin audit log.</p>
+      <div className="flex flex-col items-center justify-between gap-3 text-xs text-slate-500 sm:flex-row">
+        <p>Showing {resources.length} of {total} matching resources. All changes are reauthorized and written to the immutable admin audit log.</p>
+        {totalPages > 1 && <nav className="flex items-center gap-3" aria-label="Moderation pages"><button disabled={page <= 1} onClick={() => setPage((value) => Math.max(1, value - 1))} className="inline-flex items-center rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 disabled:opacity-40"><ChevronLeft className="mr-1 h-4 w-4" />Previous</button><span>Page {page} of {totalPages}</span><button disabled={page >= totalPages} onClick={() => setPage((value) => value + 1)} className="inline-flex items-center rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 disabled:opacity-40">Next<ChevronRight className="ml-1 h-4 w-4" /></button></nav>}
+      </div>
     </div>
   );
 }

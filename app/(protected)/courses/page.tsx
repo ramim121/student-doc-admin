@@ -1,8 +1,8 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useCallback, useState, useEffect } from 'react';
 import { supabase } from '@/lib/supabase';
-import { BookOpen, GitMerge, Check, AlertCircle, Edit3, Loader2, XCircle, Search } from 'lucide-react';
+import { BookOpen, GitMerge, Check, AlertCircle, ChevronLeft, ChevronRight, Edit3, Loader2, XCircle, Search } from 'lucide-react';
 
 interface DbCourse {
   id: string;
@@ -29,13 +29,19 @@ export default function CoursesAdminPage() {
   const [courses, setCourses] = useState<DbCourse[]>([]);
   const [universities, setUniversities] = useState<University[]>([]);
   const [loading, setLoading] = useState(true);
+  const [queryInput, setQueryInput] = useState('');
   const [query, setQuery] = useState('');
+  const [page, setPage] = useState(1);
+  const [total, setTotal] = useState(0);
   const [statusFilter, setStatusFilter] = useState<'all' | 'official' | 'custom_pending'>('all');
   const [universityFilter, setUniversityFilter] = useState('all');
+  const [universityQuery, setUniversityQuery] = useState('');
   
   // Merge state
   const [sourceCourse, setSourceCourse] = useState<DbCourse | null>(null);
   const [targetCourseId, setTargetCourseId] = useState('');
+  const [targetQuery, setTargetQuery] = useState('');
+  const [mergeTargets, setMergeTargets] = useState<DbCourse[]>([]);
   const [merging, setMerging] = useState(false);
   const [preflight, setPreflight] = useState<CourseMergePreflight | null>(null);
   const [preflightLoading, setPreflightLoading] = useState(false);
@@ -49,10 +55,6 @@ export default function CoursesAdminPage() {
   const [editDesc, setEditDesc] = useState('');
   const [editStatus, setEditStatus] = useState<'official' | 'custom_pending'>('official');
   const [saving, setSaving] = useState(false);
-
-  useEffect(() => {
-    loadData();
-  }, []);
 
   useEffect(() => {
     let active = true;
@@ -79,38 +81,84 @@ export default function CoursesAdminPage() {
     return () => { active = false; };
   }, [sourceCourse, targetCourseId]);
 
-  const loadData = async () => {
-    setLoading(true);
-    const [{ data: crsData, error: courseError }, { data: uniData, error: universityError }] = await Promise.all([
-      supabase.from('courses').select('id, university_id, code, title, description, status').order('code').limit(500),
-      supabase.from('universities').select('id, name').order('name').limit(500),
-    ]);
+  useEffect(() => {
+    if (!sourceCourse) {
+      setMergeTargets([]);
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      const normalized = targetQuery.trim().replace(/[%_,()]/g, ' ');
+      let targetLookup = supabase
+        .from('courses')
+        .select('id, university_id, code, title, description, status')
+        .eq('university_id', sourceCourse.university_id)
+        .eq('status', 'official')
+        .neq('id', sourceCourse.id);
+      if (normalized) targetLookup = targetLookup.or(`code.ilike.%${normalized}%,title.ilike.%${normalized}%`);
+      void targetLookup.order('code').limit(50).then(({ data, error: lookupError }) => {
+        if (lookupError) setError(`Merge targets could not be loaded: ${lookupError.message}`);
+        else setMergeTargets((data ?? []) as DbCourse[]);
+      });
+    }, 250);
+    return () => window.clearTimeout(timer);
+  }, [sourceCourse, targetQuery]);
 
-    if (courseError || universityError) {
-      setError(`Catalog data could not be loaded: ${(courseError ?? universityError)?.message}`);
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      const normalized = universityQuery.trim().replace(/[%_,()]/g, ' ');
+      let lookup = supabase.from('universities').select('id, name');
+      if (normalized) lookup = lookup.ilike('name', `%${normalized}%`);
+      void lookup.order('name').limit(50).then(({ data, error: lookupError }) => {
+        if (lookupError) setError(`University filters could not be loaded: ${lookupError.message}`);
+        else setUniversities((data ?? []) as University[]);
+      });
+    }, 250);
+    return () => window.clearTimeout(timer);
+  }, [universityQuery]);
+
+  const pageSize = 25;
+  const totalPages = total ? Math.ceil(total / pageSize) : 0;
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      setQuery(queryInput.trim().replace(/[%_,()]/g, ' '));
+      setPage(1);
+    }, 350);
+    return () => window.clearTimeout(timer);
+  }, [queryInput]);
+
+  const loadData = useCallback(async () => {
+    setLoading(true);
+    let courseQuery = supabase
+      .from('courses')
+      .select('id, university_id, code, title, description, status, universities(name)', { count: 'exact' });
+    if (statusFilter !== 'all') courseQuery = courseQuery.eq('status', statusFilter);
+    if (universityFilter !== 'all') courseQuery = courseQuery.eq('university_id', universityFilter);
+    if (query) courseQuery = courseQuery.or(`code.ilike.%${query}%,title.ilike.%${query}%`);
+    const from = (page - 1) * pageSize;
+    const { data: crsData, count, error: courseError } = await courseQuery.order('code').range(from, from + pageSize - 1);
+
+    if (courseError) {
+      setError(`Catalog data could not be loaded: ${courseError.message}`);
       setCourses([]);
-      setUniversities([]);
+      setTotal(0);
       setLoading(false);
       return;
     }
-    if (uniData) setUniversities(uniData as University[]);
-
     if (crsData) {
       const mapped = crsData.map((c: any) => ({
         ...c,
-        university_name: uniData?.find((u: any) => u.id === c.university_id)?.name || 'Unknown University',
+        university_name: (Array.isArray(c.universities) ? c.universities[0]?.name : c.universities?.name) || 'Unknown University',
       }));
       setCourses(mapped);
     }
+    setTotal(count ?? 0);
     setLoading(false);
-  };
+  }, [page, query, statusFilter, universityFilter]);
 
-  const visibleCourses = courses.filter((course) => {
-    if (statusFilter !== 'all' && course.status !== statusFilter) return false;
-    if (universityFilter !== 'all' && course.university_id !== universityFilter) return false;
-    const normalized = query.trim().toLowerCase();
-    return !normalized || [course.code, course.title, course.university_name || ''].some((value) => value.toLowerCase().includes(normalized));
-  });
+  useEffect(() => {
+    void loadData();
+  }, [loadData]);
 
   const handleExecuteCourseMerge = async () => {
     if (!sourceCourse || !targetCourseId || !preflight) return;
@@ -129,6 +177,7 @@ export default function CoursesAdminPage() {
       setMessage(`Successfully merged course "${sourceCourse.code}" into target course! All linked resources were updated.`);
       setSourceCourse(null);
       setTargetCourseId('');
+      setTargetQuery('');
       setPreflight(null);
       await loadData();
     } catch (err: any) {
@@ -208,13 +257,16 @@ export default function CoursesAdminPage() {
       <div className="flex flex-col gap-3 rounded-2xl border border-slate-800 bg-slate-900/50 p-4 lg:flex-row">
         <label className="relative flex-1">
           <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
-          <input value={query} onChange={(event) => setQuery(event.target.value)} type="search" placeholder="Search code, title, or university" className="h-10 w-full rounded-xl border border-slate-700 bg-slate-950 pl-10 pr-4 text-sm text-white outline-none focus:border-purple-500" />
+          <input value={queryInput} onChange={(event) => setQueryInput(event.target.value)} type="search" placeholder="Search course code or title" className="h-10 w-full rounded-xl border border-slate-700 bg-slate-950 pl-10 pr-4 text-sm text-white outline-none focus:border-purple-500" />
         </label>
-        <select value={universityFilter} onChange={(event) => setUniversityFilter(event.target.value)} className="rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white">
-          <option value="all">All universities</option>
-          {universities.map((university) => <option key={university.id} value={university.id}>{university.name}</option>)}
-        </select>
-        <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value as typeof statusFilter)} className="rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white">
+        <div className="flex flex-col gap-2 sm:flex-row">
+          <input value={universityQuery} onChange={(event) => { setUniversityQuery(event.target.value); setUniversityFilter('all'); setPage(1); }} type="search" aria-label="Search university filters" placeholder="Find university" className="rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white" />
+          <select value={universityFilter} onChange={(event) => { setUniversityFilter(event.target.value); setPage(1); }} aria-label="Filter by university" className="max-w-xs rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white">
+            <option value="all">All universities</option>
+            {universities.map((university) => <option key={university.id} value={university.id}>{university.name}</option>)}
+          </select>
+        </div>
+        <select value={statusFilter} onChange={(event) => { setStatusFilter(event.target.value as typeof statusFilter); setPage(1); }} className="rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white">
           <option value="all">All statuses</option><option value="custom_pending">Pending</option><option value="official">Official</option>
         </select>
       </div>
@@ -239,14 +291,14 @@ export default function CoursesAdminPage() {
                   Loading courses...
                 </td>
               </tr>
-            ) : visibleCourses.length === 0 ? (
+            ) : courses.length === 0 ? (
               <tr>
                 <td colSpan={5} className="px-6 py-8 text-center text-slate-500">
                   No courses created yet.
                 </td>
               </tr>
             ) : (
-              visibleCourses.map((c) => (
+              courses.map((c) => (
                 <tr key={c.id} className="hover:bg-slate-900/40 transition-colors">
                   <td className="px-6 py-4 font-mono font-bold text-indigo-400">{c.code}</td>
                   <td className="px-6 py-4 font-semibold text-white">{c.title}</td>
@@ -277,7 +329,7 @@ export default function CoursesAdminPage() {
                       Edit
                     </button>
                     <button
-                      onClick={() => setSourceCourse(c)}
+                      onClick={() => { setSourceCourse(c); setTargetQuery(''); }}
                       className="inline-flex items-center gap-1 rounded-lg border border-purple-700/50 bg-purple-950/40 px-3 py-1.5 text-xs font-medium text-purple-300 hover:bg-purple-900/60"
                     >
                       <GitMerge className="h-3.5 w-3.5" />
@@ -298,6 +350,10 @@ export default function CoursesAdminPage() {
           </tbody>
         </table>
       </div>
+      <div className="flex flex-col items-center justify-between gap-3 text-xs text-slate-500 sm:flex-row">
+        <p>Showing {courses.length} of {total} matching courses.</p>
+        {totalPages > 1 && <nav className="flex items-center gap-3" aria-label="Course pages"><button disabled={page <= 1} onClick={() => setPage((value) => Math.max(1, value - 1))} className="inline-flex items-center rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 disabled:opacity-40"><ChevronLeft className="mr-1 h-4 w-4" />Previous</button><span>Page {page} of {totalPages}</span><button disabled={page >= totalPages} onClick={() => setPage((value) => value + 1)} className="inline-flex items-center rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 disabled:opacity-40">Next<ChevronRight className="ml-1 h-4 w-4" /></button></nav>}
+      </div>
 
       {/* Course Merge Modal */}
       {sourceCourse && (
@@ -314,15 +370,14 @@ export default function CoursesAdminPage() {
             <div className="mt-5 space-y-4">
               <div>
                 <label className="text-xs font-semibold text-slate-300">Target Canonical Course</label>
+                <input value={targetQuery} onChange={(event) => { setTargetQuery(event.target.value); setTargetCourseId(''); }} type="search" placeholder="Search official course targets" className="mt-1 w-full rounded-xl border border-slate-700 bg-slate-950 px-4 py-2.5 text-sm text-white focus:border-purple-500 focus:outline-none" />
                 <select
                   value={targetCourseId}
                   onChange={(e) => setTargetCourseId(e.target.value)}
-                  className="mt-1 w-full rounded-xl border border-slate-700 bg-slate-950 px-4 py-2.5 text-sm text-white focus:border-purple-500 focus:outline-none"
+                  className="mt-2 w-full rounded-xl border border-slate-700 bg-slate-950 px-4 py-2.5 text-sm text-white focus:border-purple-500 focus:outline-none"
                 >
                   <option value="">Select target course...</option>
-                  {courses
-                    .filter((c) => c.id !== sourceCourse.id && c.university_id === sourceCourse.university_id)
-                    .map((c) => (
+                  {mergeTargets.map((c) => (
                       <option key={c.id} value={c.id}>
                         {c.code} — {c.title}
                       </option>
@@ -348,7 +403,7 @@ export default function CoursesAdminPage() {
 
             <div className="mt-6 flex justify-end gap-3">
               <button
-                onClick={() => { setSourceCourse(null); setTargetCourseId(''); setPreflight(null); }}
+                onClick={() => { setSourceCourse(null); setTargetCourseId(''); setTargetQuery(''); setPreflight(null); }}
                 className="rounded-xl px-4 py-2 text-sm font-medium text-slate-400 hover:bg-slate-800"
               >
                 Cancel

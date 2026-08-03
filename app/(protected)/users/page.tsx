@@ -9,6 +9,7 @@ import {
   Search,
   ShieldCheck,
   ShieldOff,
+  Trash2,
   UserCheck,
   UserX,
 } from 'lucide-react';
@@ -120,6 +121,31 @@ export default function UsersAdminPage() {
     setBusyId('');
   };
 
+  const scheduleDeletion = async (user: ManagedUser) => {
+    const reason = window.prompt(`Enter the account-deletion reason for "${user.full_name}":`)?.trim() || '';
+    if (!reason) return;
+    const confirmation = window.prompt(
+      `This blocks access immediately and schedules private data erasure after the 30-day recovery hold. Approved public resources are retained anonymously. Type DELETE to continue.`,
+    );
+    if (confirmation !== 'DELETE') return;
+    setBusyId(user.id);
+    setError('');
+    setMessage('');
+    const requestId = crypto.randomUUID();
+    const { error: mutationError } = await supabase.rpc('admin_set_account_status', {
+      target_user_id: user.id,
+      new_status: 'deleted',
+      reason,
+      operation_request_id: requestId,
+    });
+    if (mutationError) setError(`Account deletion could not be scheduled: ${mutationError.message}`);
+    else {
+      setMessage(`${user.full_name} is blocked and scheduled for erasure after the 30-day recovery hold. Audit request: ${requestId}`);
+      await loadUsers();
+    }
+    setBusyId('');
+  };
+
   return (
     <div className="space-y-6">
       <div><h1 className="text-2xl font-bold tracking-tight">Users & Role Administration</h1><p className="mt-1 text-sm text-slate-400">Inspect support-safe account activity, suspend access, and manage administrator membership.</p></div>
@@ -137,7 +163,7 @@ export default function UsersAdminPage() {
                 <td className="px-5 py-4"><div className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-semibold ${user.account_status === 'active' ? 'border-emerald-500/20 bg-emerald-500/10 text-emerald-300' : 'border-rose-500/20 bg-rose-500/10 text-rose-300'}`}>{user.account_status}</div><div className={`mt-2 inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-semibold ${user.role === 'admin' ? 'bg-indigo-500/10 text-indigo-300' : 'bg-slate-800 text-slate-400'}`}>{user.role === 'admin' && <ShieldCheck className="h-3.5 w-3.5" />}{user.role}</div></td>
                 <td className="px-5 py-4 text-xs"><div><span className="font-bold text-white">{user.points}</span> XP</div><div className="mt-1 text-slate-500">{user.uploads} uploads · {user.downloads} downloads</div></td>
                 <td className="px-5 py-4 text-xs text-slate-500">{new Date(user.created_at).toLocaleDateString()}</td>
-                <td className="px-5 py-4 text-right">{busyId === user.id ? <Loader2 className="ml-auto h-5 w-5 animate-spin text-indigo-400" /> : <div className="flex justify-end gap-2"><button onClick={() => void changeRole(user)} className="inline-flex items-center gap-1 rounded-lg border border-indigo-700/50 bg-indigo-950/30 px-3 py-1.5 text-xs text-indigo-300 hover:bg-indigo-900/50">{user.role === 'admin' ? <ShieldOff className="h-3.5 w-3.5" /> : <ShieldCheck className="h-3.5 w-3.5" />}{user.role === 'admin' ? 'Demote' : 'Promote'}</button>{user.account_status !== 'deleted' && <button onClick={() => void changeAccountStatus(user)} className={`inline-flex items-center gap-1 rounded-lg border px-3 py-1.5 text-xs ${user.account_status === 'active' ? 'border-rose-700/50 bg-rose-950/30 text-rose-300 hover:bg-rose-900/50' : 'border-emerald-700/50 bg-emerald-950/30 text-emerald-300 hover:bg-emerald-900/50'}`}>{user.account_status === 'active' ? <UserX className="h-3.5 w-3.5" /> : <UserCheck className="h-3.5 w-3.5" />}{user.account_status === 'active' ? 'Suspend' : 'Reactivate'}</button>}</div>}</td>
+                <td className="px-5 py-4 text-right">{busyId === user.id ? <Loader2 className="ml-auto h-5 w-5 animate-spin text-indigo-400" /> : <div className="flex flex-wrap justify-end gap-2"><button onClick={() => void changeRole(user)} className="inline-flex items-center gap-1 rounded-lg border border-indigo-700/50 bg-indigo-950/30 px-3 py-1.5 text-xs text-indigo-300 hover:bg-indigo-900/50">{user.role === 'admin' ? <ShieldOff className="h-3.5 w-3.5" /> : <ShieldCheck className="h-3.5 w-3.5" />}{user.role === 'admin' ? 'Demote' : 'Promote'}</button><button onClick={() => void changeAccountStatus(user)} className={`inline-flex items-center gap-1 rounded-lg border px-3 py-1.5 text-xs ${user.account_status === 'active' ? 'border-rose-700/50 bg-rose-950/30 text-rose-300 hover:bg-rose-900/50' : 'border-emerald-700/50 bg-emerald-950/30 text-emerald-300 hover:bg-emerald-900/50'}`}>{user.account_status === 'active' ? <UserX className="h-3.5 w-3.5" /> : <UserCheck className="h-3.5 w-3.5" />}{user.account_status === 'active' ? 'Suspend' : 'Reactivate'}</button>{user.account_status !== 'deleted' && <button onClick={() => void scheduleDeletion(user)} className="inline-flex items-center gap-1 rounded-lg border border-rose-800/60 bg-rose-950/40 px-3 py-1.5 text-xs text-rose-200 hover:bg-rose-900/60"><Trash2 className="h-3.5 w-3.5" />Delete</button>}</div>}</td>
               </tr>
             ))}
           </tbody>

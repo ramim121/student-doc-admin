@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import { AlertCircle, Check, Cloud, Loader2, RefreshCw, Sparkles } from 'lucide-react';
+import { AlertCircle, Check, Cloud, Loader2, RefreshCw, ShieldX, Sparkles } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 
 interface CleanupJob {
@@ -27,9 +27,20 @@ interface AiJob {
   resources: { title?: string } | { title?: string }[] | null;
 }
 
+interface ErasureJob {
+  id: string;
+  target_user_id: string;
+  status: string;
+  scheduled_for: string;
+  attempts: number;
+  max_attempts: number;
+  last_error_code: string | null;
+}
+
 export default function OperationsPage() {
   const [cleanupJobs, setCleanupJobs] = useState<CleanupJob[]>([]);
   const [aiJobs, setAiJobs] = useState<AiJob[]>([]);
+  const [erasureJobs, setErasureJobs] = useState<ErasureJob[]>([]);
   const [loading, setLoading] = useState(true);
   const [busyId, setBusyId] = useState('');
   const [error, setError] = useState('');
@@ -38,15 +49,17 @@ export default function OperationsPage() {
   const loadOperations = useCallback(async () => {
     setLoading(true);
     setError('');
-    const [cleanupResult, aiResult] = await Promise.all([
+    const [cleanupResult, aiResult, erasureResult] = await Promise.all([
       supabase.from('storage_cleanup_jobs').select('id, storage_provider, storage_key, reason, status, attempts, last_error_code, next_attempt_at, created_at').order('created_at', { ascending: false }).limit(100),
       supabase.from('ai_processing_jobs').select('id, resource_id, status, attempts, max_attempts, last_error_code, next_attempt_at, resources(title)').in('status', ['queued', 'processing', 'failed']).order('next_attempt_at').limit(100),
+      supabase.from('account_erasure_jobs').select('id, target_user_id, status, scheduled_for, attempts, max_attempts, last_error_code').order('scheduled_for').limit(100),
     ]);
-    const firstError = cleanupResult.error ?? aiResult.error;
+    const firstError = cleanupResult.error ?? aiResult.error ?? erasureResult.error;
     if (firstError) setError(`Operational jobs could not be loaded: ${firstError.message}`);
     else {
       setCleanupJobs((cleanupResult.data ?? []) as CleanupJob[]);
       setAiJobs((aiResult.data ?? []) as AiJob[]);
+      setErasureJobs((erasureResult.data ?? []) as ErasureJob[]);
     }
     setLoading(false);
   }, []);
@@ -109,6 +122,16 @@ export default function OperationsPage() {
               </div>
             ))}
           </JobSection>
+          <JobSection title="Account erasure jobs" icon={ShieldX} empty="No account erasure jobs have been scheduled." hasItems={erasureJobs.length > 0}>
+            {erasureJobs.map((job) => (
+              <div key={job.id} className="grid gap-3 border-b border-slate-800 px-5 py-4 last:border-0 lg:grid-cols-[1fr_150px_150px_180px] lg:items-center">
+                <div className="min-w-0"><p className="truncate font-mono text-xs text-slate-300">{job.target_user_id}</p><p className="mt-1 text-xs text-slate-500">{job.last_error_code || 'Private data and unapproved uploads are removed after the recovery hold.'}</p></div>
+                <Status value={job.status} />
+                <div className="text-xs text-slate-500">{job.attempts} / {job.max_attempts} attempts</div>
+                <div className="text-xs text-slate-400">Eligible {new Date(job.scheduled_for).toLocaleString()}</div>
+              </div>
+            ))}
+          </JobSection>
         </>
       )}
     </div>
@@ -120,6 +143,6 @@ function JobSection({ title, icon: Icon, empty, hasItems, children }: { title: s
 }
 
 function Status({ value }: { value: string }) {
-  const style = value === 'completed' ? 'bg-emerald-500/10 text-emerald-300' : value === 'failed' ? 'bg-rose-500/10 text-rose-300' : 'bg-amber-500/10 text-amber-300';
+  const style = value === 'completed' ? 'bg-emerald-500/10 text-emerald-300' : value === 'failed' ? 'bg-rose-500/10 text-rose-300' : value === 'cancelled' ? 'bg-slate-700 text-slate-300' : 'bg-amber-500/10 text-amber-300';
   return <span className={`w-fit rounded-full px-2.5 py-1 text-xs font-semibold capitalize ${style}`}>{value}</span>;
 }
