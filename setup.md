@@ -121,6 +121,9 @@ npm run build
 npm run dev
 ```
 
+GitHub CI repeats the non-interactive checks and scans full Git history with
+Gitleaks. A passing local build does not replace staging authorization tests.
+
 The development URL is `http://localhost:3001`.
 
 Before merging to `main`, verify the Vercel Preview deployment with three
@@ -143,6 +146,8 @@ identities:
 - [ ] Resource approval/rejection changes Public App visibility correctly.
 - [ ] Resource deletion handles both database state and R2 cleanup/retry.
 - [ ] University, course, resource, and user lists paginate without loading an unbounded table.
+- [ ] Resource filters for status, type, uploader, university, and course return
+      the expected bounded result set.
 - [ ] Account deletion requires a reason plus typed confirmation, schedules the recovery hold, and appears in Operations.
 - [ ] Reactivating a logically deleted user during the hold cancels scheduled erasure.
 - [ ] Admin actions never expose service-role or R2 credentials to the browser.

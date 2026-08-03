@@ -41,6 +41,8 @@ interface ResourceItem {
   course: string;
 }
 
+interface FilterOption { id: string; label: string }
+
 type RelationValue = Record<string, unknown> | Record<string, unknown>[] | null;
 
 function firstRelation(value: RelationValue) {
@@ -67,6 +69,15 @@ export default function ResourceModerationAdminPage() {
   const [statusFilter, setStatusFilter] = useState<ResourceStatus | 'all'>('pending');
   const [fileTypeFilter, setFileTypeFilter] = useState('all');
   const [dateFilter, setDateFilter] = useState('all');
+  const [uploaderFilter, setUploaderFilter] = useState('all');
+  const [universityFilter, setUniversityFilter] = useState('all');
+  const [courseFilter, setCourseFilter] = useState('all');
+  const [uploaderQuery, setUploaderQuery] = useState('');
+  const [universityQuery, setUniversityQuery] = useState('');
+  const [courseQuery, setCourseQuery] = useState('');
+  const [uploaderOptions, setUploaderOptions] = useState<FilterOption[]>([]);
+  const [universityOptions, setUniversityOptions] = useState<FilterOption[]>([]);
+  const [courseOptions, setCourseOptions] = useState<FilterOption[]>([]);
   const [queryInput, setQueryInput] = useState('');
   const [query, setQuery] = useState('');
   const [page, setPage] = useState(1);
@@ -85,6 +96,46 @@ export default function ResourceModerationAdminPage() {
     return () => window.clearTimeout(timer);
   }, [queryInput]);
 
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      const normalized = uploaderQuery.trim().replace(/[%_,()]/g, ' ');
+      let lookup = supabase.from('profiles').select('id, full_name');
+      if (normalized) lookup = lookup.ilike('full_name', `%${normalized}%`);
+      void lookup.order('full_name').limit(50).then(({ data, error: lookupError }) => {
+        if (lookupError) setError(`Uploader filters could not be loaded: ${lookupError.message}`);
+        else setUploaderOptions((data ?? []).map((row) => ({ id: row.id, label: row.full_name || 'Unnamed user' })));
+      });
+    }, 250);
+    return () => window.clearTimeout(timer);
+  }, [uploaderQuery]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      const normalized = universityQuery.trim().replace(/[%_,()]/g, ' ');
+      let lookup = supabase.from('universities').select('id, name');
+      if (normalized) lookup = lookup.ilike('name', `%${normalized}%`);
+      void lookup.order('name').limit(50).then(({ data, error: lookupError }) => {
+        if (lookupError) setError(`University filters could not be loaded: ${lookupError.message}`);
+        else setUniversityOptions((data ?? []).map((row) => ({ id: row.id, label: row.name })));
+      });
+    }, 250);
+    return () => window.clearTimeout(timer);
+  }, [universityQuery]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      const normalized = courseQuery.trim().replace(/[%_,()]/g, ' ');
+      let lookup = supabase.from('courses').select('id, code, title');
+      if (universityFilter !== 'all') lookup = lookup.eq('university_id', universityFilter);
+      if (normalized) lookup = lookup.or(`code.ilike.%${normalized}%,title.ilike.%${normalized}%`);
+      void lookup.order('code').limit(50).then(({ data, error: lookupError }) => {
+        if (lookupError) setError(`Course filters could not be loaded: ${lookupError.message}`);
+        else setCourseOptions((data ?? []).map((row) => ({ id: row.id, label: `${row.code} — ${row.title}` })));
+      });
+    }, 250);
+    return () => window.clearTimeout(timer);
+  }, [courseQuery, universityFilter]);
+
   const loadResources = useCallback(async () => {
     setLoading(true);
     setError('');
@@ -98,6 +149,9 @@ export default function ResourceModerationAdminPage() {
       `, { count: 'exact' });
     if (statusFilter !== 'all') resourceQuery = resourceQuery.eq('status', statusFilter);
     if (fileTypeFilter !== 'all') resourceQuery = resourceQuery.eq('file_type', fileTypeFilter);
+    if (uploaderFilter !== 'all') resourceQuery = resourceQuery.eq('uploader_id', uploaderFilter);
+    if (universityFilter !== 'all') resourceQuery = resourceQuery.eq('university_id', universityFilter);
+    if (courseFilter !== 'all') resourceQuery = resourceQuery.eq('course_id', courseFilter);
     if (query) resourceQuery = resourceQuery.or(`title.ilike.%${query}%,description.ilike.%${query}%`);
     if (dateFilter !== 'all') {
       const days = Number(dateFilter);
@@ -142,7 +196,7 @@ export default function ResourceModerationAdminPage() {
       );
     }
     setLoading(false);
-  }, [dateFilter, fileTypeFilter, page, query, statusFilter]);
+  }, [courseFilter, dateFilter, fileTypeFilter, page, query, statusFilter, universityFilter, uploaderFilter]);
 
   useEffect(() => {
     void loadResources();
@@ -269,6 +323,12 @@ export default function ResourceModerationAdminPage() {
         </label>
       </div>
 
+      <div className="grid gap-3 rounded-2xl border border-slate-800 bg-slate-900/50 p-4 md:grid-cols-3">
+        <FilterLookup label="Uploader" query={uploaderQuery} setQuery={(value) => { setUploaderQuery(value); setUploaderFilter('all'); setPage(1); }} value={uploaderFilter} setValue={(value) => { setUploaderFilter(value); setPage(1); }} options={uploaderOptions} placeholder="Find uploader" />
+        <FilterLookup label="University" query={universityQuery} setQuery={(value) => { setUniversityQuery(value); setUniversityFilter('all'); setCourseFilter('all'); setPage(1); }} value={universityFilter} setValue={(value) => { setUniversityFilter(value); setCourseFilter('all'); setCourseQuery(''); setPage(1); }} options={universityOptions} placeholder="Find university" />
+        <FilterLookup label="Course" query={courseQuery} setQuery={(value) => { setCourseQuery(value); setCourseFilter('all'); setPage(1); }} value={courseFilter} setValue={(value) => { setCourseFilter(value); setPage(1); }} options={courseOptions} placeholder="Find course code or title" />
+      </div>
+
       <div className="admin-card overflow-x-auto p-0">
         <table className="w-full min-w-[1050px] text-left text-sm text-slate-300">
           <thead className="border-b border-slate-800 bg-slate-900/60 text-xs uppercase text-slate-400">
@@ -344,6 +404,31 @@ export default function ResourceModerationAdminPage() {
         <p>Showing {resources.length} of {total} matching resources. All changes are reauthorized and written to the immutable admin audit log.</p>
         {totalPages > 1 && <nav className="flex items-center gap-3" aria-label="Moderation pages"><button disabled={page <= 1} onClick={() => setPage((value) => Math.max(1, value - 1))} className="inline-flex items-center rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 disabled:opacity-40"><ChevronLeft className="mr-1 h-4 w-4" />Previous</button><span>Page {page} of {totalPages}</span><button disabled={page >= totalPages} onClick={() => setPage((value) => value + 1)} className="inline-flex items-center rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 disabled:opacity-40">Next<ChevronRight className="ml-1 h-4 w-4" /></button></nav>}
       </div>
+    </div>
+  );
+}
+
+function FilterLookup({
+  label, query, setQuery, value, setValue, options, placeholder,
+}: {
+  label: string;
+  query: string;
+  setQuery: (value: string) => void;
+  value: string;
+  setValue: (value: string) => void;
+  options: FilterOption[];
+  placeholder: string;
+}) {
+  return (
+    <div>
+      <label className="text-xs font-semibold text-slate-400">
+        {label}
+        <input type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder={placeholder} className="mt-1 h-10 w-full rounded-xl border border-slate-700 bg-slate-950 px-3 text-sm text-white outline-none focus:border-indigo-500" />
+      </label>
+      <select value={value} onChange={(event) => setValue(event.target.value)} aria-label={`Filter by ${label.toLowerCase()}`} className="mt-2 h-10 w-full rounded-xl border border-slate-700 bg-slate-950 px-3 text-sm text-white outline-none focus:border-indigo-500">
+        <option value="all">All {label === 'University' ? 'universities' : `${label.toLowerCase()}s`}</option>
+        {options.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}
+      </select>
     </div>
   );
 }
