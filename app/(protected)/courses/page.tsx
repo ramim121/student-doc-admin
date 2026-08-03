@@ -219,7 +219,7 @@ export default function CoursesAdminPage() {
               Merge Course Record
             </h3>
             <p className="mt-2 text-sm text-slate-400">
-              Merging <strong className="text-amber-300">"{sourceCourse.code} — {sourceCourse.title}"</strong> into another course. All linked resources will be updated.
+              Merging <strong className="text-amber-300">&quot;{sourceCourse.code} - {sourceCourse.title}&quot;</strong> into another course. All linked resources will be updated.
             </p>
 
             <div className="mt-5 space-y-4">

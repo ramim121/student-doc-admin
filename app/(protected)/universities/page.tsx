@@ -232,7 +232,7 @@ export default function UniversitiesAdminPage() {
               Merge University Record
             </h3>
             <p className="mt-2 text-sm text-slate-400">
-              You are merging <strong className="text-amber-300">"{sourceUni.name}"</strong> into another university. All linked courses, resources, and profiles will be re-assigned, and "{sourceUni.name}" will be deleted.
+              You are merging <strong className="text-amber-300">&quot;{sourceUni.name}&quot;</strong> into another university. All linked courses, resources, and profiles will be re-assigned, and &quot;{sourceUni.name}&quot; will be deleted.
             </p>
 
             <div className="mt-5 space-y-4">
