@@ -52,10 +52,16 @@ Configure values separately for Production, Preview, and Development.
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Browser + server | Supabase anonymous/publishable key; authorization still depends on JWT + RLS |
 | `NEXT_PUBLIC_ADMIN_SITE_URL` | Browser + server | Canonical Admin App origin without a trailing slash |
 | `NEXT_PUBLIC_PORTAL_URL` | Browser + server | Canonical matching Public App origin |
+| `CLOUDFLARE_R2_ACCOUNT_ID` | Server only | Cloudflare account ID used by the operational cleanup API |
+| `CLOUDFLARE_R2_ACCESS_KEY_ID` | Server only | R2 S3 Access Key ID with delete access to the resource bucket |
+| `CLOUDFLARE_R2_SECRET_ACCESS_KEY` | Server only, sensitive | R2 S3 Secret Access Key; never prefix with `NEXT_PUBLIC_` |
+| `CLOUDFLARE_R2_ENDPOINT` | Server only | `https://<account-id>.r2.cloudflarestorage.com` |
+| `CLOUDFLARE_R2_BUCKET_NAME` | Server only | Same private resource bucket used by the Public App |
 
-The Admin App does not need Cloudflare R2 S3 credentials for browser-side
-operations. Any future server-side R2 deletion route must receive its secret
-through a server-only Vercel variable and must revalidate the admin role.
+Cloudflare credentials are used only by the server-side operational cleanup
+route. That route revalidates the session and active administrator role before
+deleting an object, then records the result through an audited database RPC.
+Rotate any credential that has appeared in chat, screenshots, logs, or source.
 
 ## 5. Supabase authentication setup
 

@@ -6,6 +6,8 @@ import {
   FileCheck,
   LayoutDashboard,
   ShieldCheck,
+  Users,
+  Wrench,
 } from 'lucide-react';
 import { SignOutButton } from '@/components/sign-out-button';
 import { createServerSupabaseClient } from '@/lib/supabase-server';
@@ -13,20 +15,23 @@ import { createServerSupabaseClient } from '@/lib/supabase-server';
 export const dynamic = 'force-dynamic';
 
 export default async function ProtectedLayout({ children }: { children: React.ReactNode }) {
-  const supabase = createServerSupabaseClient();
+  const supabase = await createServerSupabaseClient();
   const {
     data: { user },
   } = await supabase.auth.getUser();
 
   if (!user) redirect('/login');
 
-  const { data: profile } = await supabase
-    .from('profiles')
-    .select('full_name, role')
-    .eq('id', user.id)
-    .maybeSingle();
+  const [{ data: profile }, { data: role }] = await Promise.all([
+    supabase
+      .from('profiles')
+      .select('full_name')
+      .eq('id', user.id)
+      .maybeSingle(),
+    supabase.rpc('get_my_role'),
+  ]);
 
-  if (profile?.role !== 'admin') redirect('/forbidden');
+  if (role !== 'admin') redirect('/forbidden');
 
   return (
     <div className="flex min-h-screen">
@@ -59,6 +64,14 @@ export default async function ProtectedLayout({ children }: { children: React.Re
               <FileCheck className="h-4 w-4" />
               Resource Moderation
             </Link>
+            <Link href="/users" className="admin-nav-link">
+              <Users className="h-4 w-4" />
+              Users & Roles
+            </Link>
+            <Link href="/operations" className="admin-nav-link">
+              <Wrench className="h-4 w-4" />
+              Operational Recovery
+            </Link>
           </nav>
         </div>
 
@@ -69,7 +82,7 @@ export default async function ProtectedLayout({ children }: { children: React.Re
               Admin verified
             </div>
             <p className="mt-1 truncate" title={user.email || undefined}>
-              {profile.full_name || user.email || 'Administrator'}
+              {profile?.full_name || user.email || 'Administrator'}
             </p>
             <SignOutButton />
           </div>

@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { supabase } from '@/lib/supabase';
-import { Building2, GitMerge, Check, AlertCircle, Edit3, Trash2, Loader2, ArrowRight } from 'lucide-react';
+import { Building2, GitMerge, Check, AlertCircle, Edit3, Loader2, XCircle, Search } from 'lucide-react';
 
 interface University {
   id: string;
@@ -13,15 +13,25 @@ interface University {
   created_at: string;
 }
 
+interface UniversityMergePreflight {
+  sourceName: string;
+  targetName: string;
+  affected: Record<'departments' | 'subjects' | 'courses' | 'profiles' | 'resources', number>;
+  conflicts: Record<'departments' | 'subjects' | 'courses', unknown[]>;
+}
+
 export default function UniversitiesAdminPage() {
   const [universities, setUniversities] = useState<University[]>([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState<'all' | 'custom_pending' | 'official'>('all');
+  const [query, setQuery] = useState('');
   
   // Merge dialog state
   const [sourceUni, setSourceUni] = useState<University | null>(null);
   const [targetUniId, setTargetUniId] = useState('');
   const [merging, setMerging] = useState(false);
+  const [preflight, setPreflight] = useState<UniversityMergePreflight | null>(null);
+  const [preflightLoading, setPreflightLoading] = useState(false);
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
 
@@ -36,18 +46,48 @@ export default function UniversitiesAdminPage() {
     loadUniversities();
   }, []);
 
+  useEffect(() => {
+    let active = true;
+    if (!sourceUni || !targetUniId) {
+      setPreflight(null);
+      return () => { active = false; };
+    }
+
+    setPreflightLoading(true);
+    setPreflight(null);
+    setError('');
+    void supabase.rpc('preflight_university_merge', {
+      source_univ_id: sourceUni.id,
+      target_univ_id: targetUniId,
+    }).then(({ data, error: preflightError }) => {
+      if (!active) return;
+      if (preflightError) {
+        setError(`Merge preflight failed: ${preflightError.message}`);
+      } else {
+        setPreflight(data as UniversityMergePreflight);
+      }
+      setPreflightLoading(false);
+    });
+
+    return () => { active = false; };
+  }, [sourceUni, targetUniId]);
+
   const loadUniversities = async () => {
     setLoading(true);
     const { data, error } = await supabase
       .from('universities')
       .select('id, name, short, country, status, created_at')
-      .order('name');
-    if (data) setUniversities(data as University[]);
+      .order('name')
+      .limit(500);
+    if (error) {
+      setError(`Universities could not be loaded: ${error.message}`);
+      setUniversities([]);
+    } else if (data) setUniversities(data as University[]);
     setLoading(false);
   };
 
   const handleExecuteMerge = async () => {
-    if (!sourceUni || !targetUniId) return;
+    if (!sourceUni || !targetUniId || !preflight) return;
     setMerging(true);
     setError('');
     setMessage('');
@@ -63,6 +103,7 @@ export default function UniversitiesAdminPage() {
       setMessage(`Successfully merged "${sourceUni.name}" into target university! All associated courses, documents, and profiles were re-linked.`);
       setSourceUni(null);
       setTargetUniId('');
+      setPreflight(null);
       await loadUniversities();
     } catch (err: any) {
       setError(err.message || 'Failed to execute university merge.');
@@ -77,14 +118,12 @@ export default function UniversitiesAdminPage() {
     setError('');
 
     try {
-      const { error: updateError } = await supabase
-        .from('universities')
-        .update({
-          name: editName.trim(),
-          short: editShort.trim(),
-          status: editStatus,
-        })
-        .eq('id', editingUni.id);
+      const { error: updateError } = await supabase.rpc('update_university_admin', {
+        university_id: editingUni.id,
+        new_name: editName.trim(),
+        new_short: editShort.trim(),
+        new_status: editStatus,
+      });
 
       if (updateError) throw updateError;
 
@@ -98,10 +137,34 @@ export default function UniversitiesAdminPage() {
     }
   };
 
+  const rejectProposal = async (university: University) => {
+    const reason = window.prompt(`Enter the reason to reject “${university.name}”:`)?.trim();
+    if (!reason || !window.confirm('Reject this proposal? Dependency-free proposal records will be deleted and the action will be audited.')) return;
+    setError('');
+    setMessage('');
+    const requestId = crypto.randomUUID();
+    const { error: rejectError } = await supabase.rpc('reject_university_proposal', {
+      university_id: university.id,
+      reason,
+      operation_request_id: requestId,
+    });
+    if (rejectError) setError(`Proposal rejection failed: ${rejectError.message}`);
+    else {
+      setMessage(`Rejected “${university.name}”. Audit request: ${requestId}`);
+      await loadUniversities();
+    }
+  };
+
   const filteredUnis = universities.filter((u) => {
     if (filter === 'custom_pending') return u.status === 'custom_pending';
     if (filter === 'official') return u.status === 'official';
-    return true;
+    const normalized = query.trim().toLowerCase();
+    return !normalized || [u.name, u.short, u.country].some((value) => value.toLowerCase().includes(normalized));
+  });
+
+  const visibleUnis = filteredUnis.filter((u) => {
+    const normalized = query.trim().toLowerCase();
+    return !normalized || [u.name, u.short, u.country].some((value) => value.toLowerCase().includes(normalized));
   });
 
   return (
@@ -149,6 +212,11 @@ export default function UniversitiesAdminPage() {
         </div>
       )}
 
+      <label className="relative block max-w-xl">
+        <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
+        <input value={query} onChange={(event) => setQuery(event.target.value)} type="search" placeholder="Search name, abbreviation, or country" className="h-10 w-full rounded-xl border border-slate-700 bg-slate-950 pl-10 pr-4 text-sm text-white outline-none focus:border-indigo-500" />
+      </label>
+
       {/* Universities Table */}
       <div className="admin-card overflow-hidden p-0">
         <table className="w-full text-left text-sm text-slate-300">
@@ -168,14 +236,14 @@ export default function UniversitiesAdminPage() {
                   Loading universities...
                 </td>
               </tr>
-            ) : filteredUnis.length === 0 ? (
+            ) : visibleUnis.length === 0 ? (
               <tr>
                 <td colSpan={4} className="px-6 py-8 text-center text-slate-500">
                   No universities matching filter.
                 </td>
               </tr>
             ) : (
-              filteredUnis.map((u) => (
+              visibleUnis.map((u) => (
                 <tr key={u.id} className="hover:bg-slate-900/40 transition-colors">
                   <td className="px-6 py-4 font-semibold text-white">
                     <div className="flex items-center gap-2">
@@ -215,6 +283,14 @@ export default function UniversitiesAdminPage() {
                       <GitMerge className="h-3.5 w-3.5" />
                       Merge Into...
                     </button>
+                    {u.status === 'custom_pending' && (
+                      <button
+                        onClick={() => void rejectProposal(u)}
+                        className="inline-flex items-center gap-1 rounded-lg border border-rose-700/50 bg-rose-950/40 px-3 py-1.5 text-xs font-medium text-rose-300 hover:bg-rose-900/60"
+                      >
+                        <XCircle className="h-3.5 w-3.5" />Reject
+                      </button>
+                    )}
                   </td>
                 </tr>
               ))
@@ -245,7 +321,7 @@ export default function UniversitiesAdminPage() {
                 >
                   <option value="">Select target university...</option>
                   {universities
-                    .filter((u) => u.id !== sourceUni.id)
+                    .filter((u) => u.id !== sourceUni.id && u.status === 'official')
                     .map((u) => (
                       <option key={u.id} value={u.id}>
                         {u.name} ({u.short}) {u.status === 'official' ? '✔ Official' : ''}
@@ -253,17 +329,40 @@ export default function UniversitiesAdminPage() {
                     ))}
                 </select>
               </div>
+              {preflightLoading && (
+                <div className="flex items-center gap-2 rounded-xl border border-slate-700 bg-slate-950 p-4 text-sm text-slate-400">
+                  <Loader2 className="h-4 w-4 animate-spin text-indigo-400" />Calculating affected rows and conflicts…
+                </div>
+              )}
+              {preflight && (
+                <div className="rounded-xl border border-amber-500/20 bg-amber-950/20 p-4">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-amber-300">Preflight impact</p>
+                  <dl className="mt-3 grid grid-cols-2 gap-2 text-xs text-slate-300 sm:grid-cols-3">
+                    {Object.entries(preflight.affected).map(([label, count]) => (
+                      <div key={label} className="rounded-lg bg-slate-950/70 p-2">
+                        <dt className="capitalize text-slate-500">{label}</dt>
+                        <dd className="mt-1 text-base font-bold text-white">{count}</dd>
+                      </div>
+                    ))}
+                  </dl>
+                  <p className="mt-3 text-xs text-slate-400">
+                    Detected conflicts: {preflight.conflicts.departments.length} departments,{' '}
+                    {preflight.conflicts.subjects.length} subjects, and {preflight.conflicts.courses.length} courses.
+                    Matching records are resolved deterministically inside the same transaction.
+                  </p>
+                </div>
+              )}
             </div>
 
             <div className="mt-6 flex justify-end gap-3">
               <button
-                onClick={() => setSourceUni(null)}
+                onClick={() => { setSourceUni(null); setTargetUniId(''); setPreflight(null); }}
                 className="rounded-xl px-4 py-2 text-sm font-medium text-slate-400 hover:bg-slate-800"
               >
                 Cancel
               </button>
               <button
-                disabled={merging || !targetUniId}
+                disabled={merging || preflightLoading || !preflight}
                 onClick={handleExecuteMerge}
                 className="inline-flex items-center gap-2 rounded-xl bg-indigo-600 px-5 py-2 text-sm font-semibold text-white hover:bg-indigo-500 disabled:opacity-50"
               >

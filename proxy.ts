@@ -12,7 +12,7 @@ function copyAuthState(source: NextResponse, target: NextResponse) {
   return target;
 }
 
-export async function middleware(request: NextRequest) {
+export async function proxy(request: NextRequest) {
   let response = NextResponse.next({ request });
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
@@ -60,12 +60,8 @@ export async function middleware(request: NextRequest) {
     return copyAuthState(response, NextResponse.redirect(loginUrl));
   }
 
-  const { data: profile } = await supabase
-    .from('profiles')
-    .select('role')
-    .eq('id', user.id)
-    .maybeSingle();
-  const isAdmin = profile?.role === 'admin';
+  const { data: role } = await supabase.rpc('get_my_role');
+  const isAdmin = role === 'admin';
 
   if (!isAdmin && request.nextUrl.pathname !== '/forbidden') {
     const forbiddenUrl = request.nextUrl.clone();

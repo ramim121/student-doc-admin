@@ -34,13 +34,9 @@ function LoginForm() {
       return;
     }
 
-    const { data: profile, error: profileError } = await supabase
-      .from('profiles')
-      .select('role')
-      .eq('id', data.user.id)
-      .maybeSingle();
+    const { data: role, error: profileError } = await supabase.rpc('get_my_role');
 
-    if (profileError || profile?.role !== 'admin') {
+    if (profileError || role !== 'admin') {
       router.replace('/forbidden');
       router.refresh();
       return;
