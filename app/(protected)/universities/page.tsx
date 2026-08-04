@@ -2,7 +2,7 @@
 
 import { useCallback, useState, useEffect } from 'react';
 import { supabase } from '@/lib/supabase';
-import { Building2, GitMerge, Check, AlertCircle, ChevronLeft, ChevronRight, Edit3, Loader2, XCircle, Search } from 'lucide-react';
+import { Building2, GitMerge, Check, AlertCircle, ChevronLeft, ChevronRight, Edit3, Loader2, Plus, Trash2, X, XCircle, Search } from 'lucide-react';
 
 interface University {
   id: string;
@@ -46,6 +46,12 @@ export default function UniversitiesAdminPage() {
   const [editShort, setEditShort] = useState('');
   const [editStatus, setEditStatus] = useState<'official' | 'custom_pending'>('official');
   const [saving, setSaving] = useState(false);
+
+  const [creating, setCreating] = useState(false);
+  const [newName, setNewName] = useState('');
+  const [newShort, setNewShort] = useState('');
+  const [newCountry, setNewCountry] = useState('');
+  const [newType, setNewType] = useState<'university' | 'high_school'>('university');
 
   useEffect(() => {
     let active = true;
@@ -183,6 +189,53 @@ export default function UniversitiesAdminPage() {
     }
   };
 
+  const handleCreate = async () => {
+    setSaving(true);
+    setError('');
+    setMessage('');
+    const { error: createError } = await supabase.rpc('create_university_admin', {
+      new_name: newName.trim(),
+      new_short: newShort.trim(),
+      new_country: newCountry.trim(),
+      new_institution_type: newType,
+      new_status: 'official',
+    });
+    if (createError) setError(createError.message);
+    else {
+      setMessage(`Created “${newName.trim()}”.`);
+      setNewName('');
+      setNewShort('');
+      setNewCountry('');
+      setCreating(false);
+      await loadUniversities();
+    }
+    setSaving(false);
+  };
+
+  const handleDelete = async (university: University) => {
+    const reason = window.prompt(`Why are you deleting “${university.name}”?`)?.trim();
+    if (!reason) return;
+    if (!window.confirm(
+      `Delete “${university.name}”? Its courses and departments go with it. This is audited and cannot be undone.`,
+    )) return;
+
+    setError('');
+    setMessage('');
+    const requestId = crypto.randomUUID();
+    const { error: deleteError } = await supabase.rpc('delete_university_admin', {
+      p_university_id: university.id,
+      p_reason: reason,
+      p_request_id: requestId,
+    });
+    // The RPC refuses when resources or members still point at it, and says
+    // how many. Surfacing that verbatim is more useful than a generic failure.
+    if (deleteError) setError(deleteError.message);
+    else {
+      setMessage(`Deleted “${university.name}”. Audit request: ${requestId}`);
+      await loadUniversities();
+    }
+  };
+
   const rejectProposal = async (university: University) => {
     const reason = window.prompt(`Enter the reason to reject “${university.name}”:`)?.trim();
     if (!reason || !window.confirm('Reject this proposal? Dependency-free proposal records will be deleted and the action will be audited.')) return;
@@ -203,13 +256,21 @@ export default function UniversitiesAdminPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight">University Management & Merging</h1>
+          <h1 className="text-2xl font-bold tracking-tight">Institution Management</h1>
           <p className="mt-1 text-sm text-slate-400">
-            Clean up custom user entries by merging duplicates into canonical universities using atomic DB procedures.
+            Add institutions, correct their details, merge duplicate user entries, and remove ones nothing depends on.
           </p>
         </div>
+        <div className="flex flex-wrap items-center gap-2">
+        <button
+          onClick={() => setCreating((open) => !open)}
+          className="inline-flex items-center gap-2 rounded-xl bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-500"
+        >
+          {creating ? <X className="h-4 w-4" /> : <Plus className="h-4 w-4" />}
+          {creating ? 'Cancel' : 'New institution'}
+        </button>
         <div className="flex rounded-xl bg-slate-900 p-1 border border-slate-800 text-xs">
           <button
             onClick={() => { setFilter('all'); setPage(1); }}
@@ -230,7 +291,51 @@ export default function UniversitiesAdminPage() {
             Official
           </button>
         </div>
+        </div>
       </div>
+
+      {creating && (
+        <section className="admin-card">
+          <h2 className="font-semibold text-white">New institution</h2>
+          <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            <input
+              autoFocus
+              value={newName}
+              onChange={(event) => setNewName(event.target.value)}
+              placeholder="Full name"
+              className="admin-input"
+            />
+            <input
+              value={newShort}
+              onChange={(event) => setNewShort(event.target.value)}
+              placeholder="Short code, e.g. EWU"
+              className="admin-input"
+            />
+            <input
+              value={newCountry}
+              onChange={(event) => setNewCountry(event.target.value)}
+              placeholder="Country"
+              className="admin-input"
+            />
+            <select
+              value={newType}
+              onChange={(event) => setNewType(event.target.value as 'university' | 'high_school')}
+              className="admin-input"
+            >
+              <option value="university">University</option>
+              <option value="high_school">High School</option>
+            </select>
+          </div>
+          <button
+            onClick={() => void handleCreate()}
+            disabled={saving || newName.trim().length < 2 || newShort.trim().length < 2 || newCountry.trim().length < 2}
+            className="mt-4 inline-flex items-center gap-2 rounded-xl bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-500 disabled:opacity-50"
+          >
+            {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
+            Create
+          </button>
+        </section>
+      )}
 
       {message && (
         <div className="rounded-xl border border-emerald-500/30 bg-emerald-950/20 p-4 text-sm text-emerald-400 flex items-center gap-2">
@@ -325,6 +430,14 @@ export default function UniversitiesAdminPage() {
                         <XCircle className="h-3.5 w-3.5" />Reject
                       </button>
                     )}
+                    <button
+                      onClick={() => void handleDelete(u)}
+                      title="Delete. Refused while resources or members still reference it."
+                      className="inline-flex items-center gap-1 rounded-lg border border-rose-900/50 bg-rose-950/20 px-3 py-1.5 text-xs font-medium text-rose-300 hover:bg-rose-950/50"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                      Delete
+                    </button>
                   </td>
                 </tr>
               ))

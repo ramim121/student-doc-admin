@@ -2,7 +2,7 @@
 
 import { useCallback, useState, useEffect } from 'react';
 import { supabase } from '@/lib/supabase';
-import { BookOpen, GitMerge, Check, AlertCircle, ChevronLeft, ChevronRight, Edit3, Loader2, XCircle, Search } from 'lucide-react';
+import { BookOpen, GitMerge, Check, AlertCircle, ChevronLeft, ChevronRight, Edit3, Loader2, Plus, Trash2, X, XCircle, Search } from 'lucide-react';
 
 interface DbCourse {
   id: string;
@@ -47,6 +47,12 @@ export default function CoursesAdminPage() {
   const [preflightLoading, setPreflightLoading] = useState(false);
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
+
+  const [creating, setCreating] = useState(false);
+  const [newUniId, setNewUniId] = useState('');
+  const [newCode, setNewCode] = useState('');
+  const [newTitle, setNewTitle] = useState('');
+  const [newDesc, setNewDesc] = useState('');
 
   // Edit state
   const [editingCourse, setEditingCourse] = useState<DbCourse | null>(null);
@@ -213,6 +219,51 @@ export default function CoursesAdminPage() {
     }
   };
 
+  const handleCreate = async () => {
+    setSaving(true);
+    setError('');
+    setMessage('');
+    const { error: createError } = await supabase.rpc('create_course_admin', {
+      p_university_id: newUniId,
+      new_code: newCode.trim(),
+      new_title: newTitle.trim(),
+      new_description: newDesc.trim() || null,
+      new_status: 'official',
+    });
+    if (createError) setError(createError.message);
+    else {
+      setMessage(`Created “${newCode.trim()} — ${newTitle.trim()}”.`);
+      setNewCode('');
+      setNewTitle('');
+      setNewDesc('');
+      setCreating(false);
+      await loadData();
+    }
+    setSaving(false);
+  };
+
+  const handleDelete = async (course: DbCourse) => {
+    const reason = window.prompt(`Why are you deleting “${course.code} — ${course.title}”?`)?.trim();
+    if (!reason) return;
+    if (!window.confirm(`Delete “${course.code}”? This is audited and cannot be undone.`)) return;
+
+    setError('');
+    setMessage('');
+    const requestId = crypto.randomUUID();
+    const { error: deleteError } = await supabase.rpc('delete_course_admin', {
+      p_course_id: course.id,
+      p_reason: reason,
+      p_request_id: requestId,
+    });
+    // The RPC refuses while resources still reference the course, and reports
+    // how many. That message is more useful than a generic failure.
+    if (deleteError) setError(deleteError.message);
+    else {
+      setMessage(`Deleted “${course.code}”. Audit request: ${requestId}`);
+      await loadData();
+    }
+  };
+
   const rejectProposal = async (course: DbCourse) => {
     const reason = window.prompt(`Enter the reason to reject “${course.code} — ${course.title}”:`)?.trim();
     if (!reason || !window.confirm('Reject this proposal? A dependency-free proposal is deleted and the action is audited.')) return;
@@ -233,12 +284,67 @@ export default function CoursesAdminPage() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold tracking-tight">Course & Short Code Management</h1>
-        <p className="mt-1 text-sm text-slate-400">
-          Manage course titles, edit short codes (e.g. `ACC-401`, `FIN-435`), and execute atomic course merging procedures.
-        </p>
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <h1 className="text-2xl font-bold tracking-tight">Course & Short Code Management</h1>
+          <p className="mt-1 text-sm text-slate-400">
+            Add courses, correct titles and short codes (e.g. ACC-401, FIN-435), merge duplicates, and remove ones nothing references.
+          </p>
+        </div>
+        <button
+          onClick={() => setCreating((open) => !open)}
+          className="inline-flex shrink-0 items-center justify-center gap-2 rounded-xl bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-500"
+        >
+          {creating ? <X className="h-4 w-4" /> : <Plus className="h-4 w-4" />}
+          {creating ? 'Cancel' : 'New course'}
+        </button>
       </div>
+
+      {creating && (
+        <section className="admin-card">
+          <h2 className="font-semibold text-white">New course</h2>
+          <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            <select
+              value={newUniId}
+              onChange={(event) => setNewUniId(event.target.value)}
+              className="admin-input"
+            >
+              <option value="">Select institution</option>
+              {universities.map((university) => (
+                <option key={university.id} value={university.id}>
+                  {university.name}
+                </option>
+              ))}
+            </select>
+            <input
+              value={newCode}
+              onChange={(event) => setNewCode(event.target.value)}
+              placeholder="Code, e.g. FIN-435"
+              className="admin-input"
+            />
+            <input
+              value={newTitle}
+              onChange={(event) => setNewTitle(event.target.value)}
+              placeholder="Title"
+              className="admin-input"
+            />
+            <input
+              value={newDesc}
+              onChange={(event) => setNewDesc(event.target.value)}
+              placeholder="Description (optional)"
+              className="admin-input"
+            />
+          </div>
+          <button
+            onClick={() => void handleCreate()}
+            disabled={saving || !newUniId || newCode.trim().length < 2 || newTitle.trim().length < 2}
+            className="mt-4 inline-flex items-center gap-2 rounded-xl bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-500 disabled:opacity-50"
+          >
+            {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
+            Create
+          </button>
+        </section>
+      )}
 
       {message && (
         <div className="rounded-xl border border-emerald-500/30 bg-emerald-950/20 p-4 text-sm text-emerald-400 flex items-center gap-2">
@@ -343,6 +449,14 @@ export default function CoursesAdminPage() {
                         <XCircle className="h-3.5 w-3.5" />Reject
                       </button>
                     )}
+                    <button
+                      onClick={() => void handleDelete(c)}
+                      title="Delete. Refused while resources still reference this course."
+                      className="inline-flex items-center gap-1 rounded-lg border border-rose-900/50 bg-rose-950/20 px-3 py-1.5 text-xs font-medium text-rose-300 hover:bg-rose-950/50"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                      Delete
+                    </button>
                   </td>
                 </tr>
               ))
