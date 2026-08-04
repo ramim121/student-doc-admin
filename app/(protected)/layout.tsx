@@ -6,6 +6,7 @@ import {
   FileCheck,
   LayoutDashboard,
   ShieldCheck,
+  Tag,
   Users,
   Wrench,
 } from 'lucide-react';
@@ -59,6 +60,10 @@ export default async function ProtectedLayout({ children }: { children: React.Re
             <Link href="/courses" className="admin-nav-link">
               <BookOpen className="h-4 w-4" />
               Course & Short Codes
+            </Link>
+            <Link href="/categories" className="admin-nav-link">
+              <Tag className="h-4 w-4" />
+              Document Categories
             </Link>
             <Link href="/resources" className="admin-nav-link">
               <FileCheck className="h-4 w-4" />
