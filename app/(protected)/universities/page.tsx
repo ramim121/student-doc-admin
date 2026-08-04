@@ -357,8 +357,10 @@ export default function UniversitiesAdminPage() {
       </label>
 
       {/* Universities Table */}
-      <div className="admin-card overflow-hidden p-0">
-        <table className="w-full text-left text-sm text-slate-300">
+      {/* overflow-x-auto, not overflow-hidden: on a phone the table must
+          scroll inside the card rather than being clipped. */}
+      <div className="admin-card overflow-x-auto p-0">
+        <table className="w-full min-w-[720px] text-left text-sm text-slate-300">
           <thead className="border-b border-slate-800 bg-slate-900/60 text-xs uppercase text-slate-400">
             <tr>
               <th className="px-6 py-4">University Name</th>

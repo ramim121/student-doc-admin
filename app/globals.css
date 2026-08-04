@@ -18,6 +18,10 @@ body {
   font-weight: 500;
   color: #94a3b8;
   transition: all 0.2s ease;
+  /* The nav is a horizontal scroll strip on phones; without these the links
+     compress into unreadable slivers instead of scrolling. */
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 
 .admin-nav-link:hover, .admin-nav-link.active {

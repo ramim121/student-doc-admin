@@ -35,8 +35,10 @@ export default async function ProtectedLayout({ children }: { children: React.Re
   if (role !== 'admin') redirect('/forbidden');
 
   return (
-    <div className="flex min-h-screen">
-      <aside className="flex w-64 shrink-0 flex-col justify-between border-r border-slate-800 bg-[#0c121e] p-6">
+    // Column on phones, sidebar from lg. A fixed 16rem rail left roughly 100px
+    // of content on a 360px screen.
+    <div className="flex min-h-screen flex-col lg:flex-row">
+      <aside className="flex shrink-0 flex-col justify-between border-b border-slate-800 bg-[#0c121e] p-4 lg:w-64 lg:border-b-0 lg:border-r lg:p-6">
         <div>
           <div className="flex items-center gap-3 px-2 py-3">
             <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-tr from-indigo-600 to-purple-600 font-bold text-white shadow-lg">
@@ -48,7 +50,11 @@ export default async function ProtectedLayout({ children }: { children: React.Re
             </div>
           </div>
 
-          <nav className="mt-8 space-y-1" aria-label="Admin navigation">
+          {/* Horizontally scrollable strip on phones, stacked list from lg. */}
+          <nav
+            className="mt-4 flex gap-1 overflow-x-auto pb-1 lg:mt-8 lg:flex-col lg:space-y-1 lg:overflow-visible lg:pb-0"
+            aria-label="Admin navigation"
+          >
             <Link href="/" className="admin-nav-link">
               <LayoutDashboard className="h-4 w-4" />
               Dashboard Overview
@@ -94,7 +100,9 @@ export default async function ProtectedLayout({ children }: { children: React.Re
         </div>
       </aside>
 
-      <main className="flex-1 overflow-y-auto p-8">{children}</main>
+      {/* min-w-0 lets wide tables scroll inside their own wrapper instead of
+          stretching the flex row and scrolling the whole page sideways. */}
+      <main className="min-w-0 flex-1 overflow-y-auto p-4 sm:p-6 lg:p-8">{children}</main>
     </div>
   );
 }
