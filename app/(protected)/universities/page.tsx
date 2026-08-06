@@ -2,7 +2,7 @@
 
 import { useCallback, useState, useEffect } from 'react';
 import { supabase } from '@/lib/supabase';
-import { Building2, GitMerge, Check, AlertCircle, ChevronLeft, ChevronRight, Edit3, Layers, Loader2, Plus, Trash2, X, XCircle, Search } from 'lucide-react';
+import { Building2, GitMerge, Check, AlertCircle, ChevronLeft, ChevronRight, Edit3, Layers, Loader2, Plus, Trash2, Upload, X, XCircle, Search } from 'lucide-react';
 import { groupBySubject } from '@/lib/subject';
 
 interface University {
@@ -10,9 +10,52 @@ interface University {
   name: string;
   short: string;
   country: string;
+  color: string | null;
+  logo_key: string | null;
   status: 'official' | 'custom_pending';
   created_at: string;
 }
+
+/**
+ * Mirrors lib/monogram.ts in the portal. Tailwind only emits classes it finds
+ * in source, so the portal safelists exactly these - anything else stored here
+ * would render as a blank tile there.
+ */
+const MONOGRAM_THEMES = [
+  { value: 'from-indigo-600 to-blue-700', label: 'Indigo' },
+  { value: 'from-blue-700 to-indigo-800', label: 'Deep blue' },
+  { value: 'from-emerald-600 to-teal-700', label: 'Emerald' },
+  { value: 'from-red-500 to-rose-600', label: 'Red' },
+  { value: 'from-orange-500 to-red-600', label: 'Orange' },
+  { value: 'from-amber-500 to-orange-600', label: 'Amber' },
+  { value: 'from-fuchsia-500 to-purple-600', label: 'Fuchsia' },
+  { value: 'from-purple-600 to-indigo-700', label: 'Purple' },
+  { value: 'from-cyan-500 to-blue-600', label: 'Cyan' },
+  { value: 'from-slate-700 to-slate-900', label: 'Slate' },
+];
+
+/** The logo image is served by the portal, so previews point at its origin. */
+const PORTAL_ORIGIN = process.env.NEXT_PUBLIC_PORTAL_URL || 'http://localhost:3000';
+
+/** Swatch colours, so the picker previews without depending on the portal's CSS. */
+const SWATCHES: Record<string, string> = {
+  'from-indigo-600 to-blue-700': 'linear-gradient(135deg,#4f46e5,#1d4ed8)',
+  'from-blue-700 to-indigo-800': 'linear-gradient(135deg,#1d4ed8,#3730a3)',
+  'from-emerald-600 to-teal-700': 'linear-gradient(135deg,#059669,#0f766e)',
+  'from-red-500 to-rose-600': 'linear-gradient(135deg,#ef4444,#e11d48)',
+  'from-orange-500 to-red-600': 'linear-gradient(135deg,#f97316,#dc2626)',
+  'from-amber-500 to-orange-600': 'linear-gradient(135deg,#f59e0b,#ea580c)',
+  'from-fuchsia-500 to-purple-600': 'linear-gradient(135deg,#d946ef,#9333ea)',
+  'from-purple-600 to-indigo-700': 'linear-gradient(135deg,#9333ea,#4338ca)',
+  'from-cyan-500 to-blue-600': 'linear-gradient(135deg,#06b6d4,#2563eb)',
+  'from-slate-700 to-slate-900': 'linear-gradient(135deg,#334155,#0f172a)',
+};
+
+/**
+ * The delete RPCs require a reason and record it in admin_audit_log. Admins are
+ * not asked to type one, so this is what the audit trail carries.
+ */
+const AUDIT_REASON = 'Deleted from the admin console';
 
 /** A course belonging to an institution, with how many documents reference it. */
 interface LinkedCourse {
@@ -55,6 +98,10 @@ export default function UniversitiesAdminPage() {
   const [editName, setEditName] = useState('');
   const [editShort, setEditShort] = useState('');
   const [editStatus, setEditStatus] = useState<'official' | 'custom_pending'>('official');
+  const [editColor, setEditColor] = useState(MONOGRAM_THEMES[0].value);
+  const [logoBusy, setLogoBusy] = useState(false);
+  /** Bumped after an upload so the preview refetches instead of using the cache. */
+  const [logoVersion, setLogoVersion] = useState(0);
   const [saving, setSaving] = useState(false);
 
   // Linked courses, grouped by subject
@@ -105,7 +152,7 @@ export default function UniversitiesAdminPage() {
       const normalized = targetQuery.trim().replace(/[%_,()]/g, ' ');
       let targetLookup = supabase
         .from('universities')
-        .select('id, name, short, country, status, created_at')
+        .select('id, name, short, country, color, logo_key, status, created_at')
         .eq('status', 'official')
         .neq('id', sourceUni.id);
       if (normalized) targetLookup = targetLookup.or(`name.ilike.%${normalized}%,short.ilike.%${normalized}%`);
@@ -132,7 +179,7 @@ export default function UniversitiesAdminPage() {
     setLoading(true);
     let universityQuery = supabase
       .from('universities')
-      .select('id, name, short, country, status, created_at', { count: 'exact' });
+      .select('id, name, short, country, color, logo_key, status, created_at', { count: 'exact' });
     if (filter !== 'all') universityQuery = universityQuery.eq('status', filter);
     if (query) universityQuery = universityQuery.or(`name.ilike.%${query}%,short.ilike.%${query}%,country.ilike.%${query}%`);
     const from = (page - 1) * pageSize;
@@ -223,6 +270,7 @@ export default function UniversitiesAdminPage() {
         new_name: editName.trim(),
         new_short: editShort.trim(),
         new_status: editStatus,
+        new_color: editColor,
       });
 
       if (updateError) throw updateError;
@@ -235,6 +283,45 @@ export default function UniversitiesAdminPage() {
     } finally {
       setSaving(false);
     }
+  };
+
+  const uploadLogo = async (file: File) => {
+    if (!editingUni) return;
+    setLogoBusy(true);
+    setError('');
+    setMessage('');
+    const body = new FormData();
+    body.append('file', file);
+    const result = await fetch(`/api/universities/${editingUni.id}/logo`, { method: 'POST', body });
+    const payload = await result.json().catch(() => null);
+    if (!result.ok) {
+      setError(payload?.error?.message || 'The logo could not be uploaded.');
+    } else {
+      setMessage(`Logo updated for “${editingUni.name}”.`);
+      setEditingUni({ ...editingUni, logo_key: 'set' });
+      setLogoVersion((value) => value + 1);
+      await loadUniversities();
+    }
+    setLogoBusy(false);
+  };
+
+  const removeLogo = async () => {
+    if (!editingUni) return;
+    if (!window.confirm(`Remove the logo for “${editingUni.name}”? It will show its monogram instead.`)) return;
+    setLogoBusy(true);
+    setError('');
+    setMessage('');
+    const result = await fetch(`/api/universities/${editingUni.id}/logo`, { method: 'DELETE' });
+    const payload = await result.json().catch(() => null);
+    if (!result.ok) {
+      setError(payload?.error?.message || 'The logo could not be removed.');
+    } else {
+      setMessage(`Logo removed from “${editingUni.name}”.`);
+      setEditingUni({ ...editingUni, logo_key: null });
+      setLogoVersion((value) => value + 1);
+      await loadUniversities();
+    }
+    setLogoBusy(false);
   };
 
   const handleCreate = async () => {
@@ -261,8 +348,6 @@ export default function UniversitiesAdminPage() {
   };
 
   const handleDelete = async (university: University) => {
-    const reason = window.prompt(`Why are you deleting “${university.name}”?`)?.trim();
-    if (!reason) return;
     if (!window.confirm(
       `Delete “${university.name}”? Its courses and departments go with it. This is audited and cannot be undone.`,
     )) return;
@@ -272,7 +357,7 @@ export default function UniversitiesAdminPage() {
     const requestId = crypto.randomUUID();
     const { error: deleteError } = await supabase.rpc('delete_university_admin', {
       p_university_id: university.id,
-      p_reason: reason,
+      p_reason: AUDIT_REASON,
       p_request_id: requestId,
     });
     // The RPC refuses when resources or members still point at it, and says
@@ -459,6 +544,11 @@ export default function UniversitiesAdminPage() {
                         setEditName(u.name);
                         setEditShort(u.short);
                         setEditStatus(u.status);
+                        setEditColor(
+                          MONOGRAM_THEMES.some((theme) => theme.value === u.color)
+                            ? (u.color as string)
+                            : MONOGRAM_THEMES[0].value,
+                        );
                       }}
                       className="inline-flex items-center gap-1 rounded-lg border border-slate-700 bg-slate-800 px-3 py-1.5 text-xs font-medium hover:bg-slate-700"
                     >
@@ -760,6 +850,87 @@ export default function UniversitiesAdminPage() {
                   <option value="official">Official Verified</option>
                   <option value="custom_pending">Custom / Pending Review</option>
                 </select>
+              </div>
+
+              <div className="rounded-xl border border-slate-800 bg-slate-950 p-4">
+                <p className="text-xs font-semibold text-slate-300">Logo</p>
+                <p className="mt-1 text-xs text-slate-500">
+                  Shown on the public site. Without one the monogram below is used.
+                  PNG, JPEG or WebP, up to 1 MB.
+                </p>
+
+                <div className="mt-3 flex items-center gap-4">
+                  <div className="flex h-16 w-16 shrink-0 items-center justify-center overflow-hidden rounded-2xl border border-slate-700 bg-white">
+                    {editingUni.logo_key ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img
+                        src={`${PORTAL_ORIGIN}/api/universities/${editingUni.id}/logo?v=${logoVersion}`}
+                        alt={`${editingUni.short} logo`}
+                        className="h-full w-full object-contain p-1"
+                      />
+                    ) : (
+                      <span
+                        className="flex h-full w-full items-center justify-center text-sm font-bold text-white"
+                        style={{ backgroundImage: SWATCHES[editColor] }}
+                      >
+                        {editShort || editingUni.short}
+                      </span>
+                    )}
+                  </div>
+
+                  <div className="flex flex-wrap gap-2">
+                    <label className="inline-flex cursor-pointer items-center gap-2 rounded-xl border border-slate-700 bg-slate-800 px-3 py-2 text-xs font-semibold text-white hover:bg-slate-700">
+                      {logoBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Upload className="h-3.5 w-3.5" />}
+                      {editingUni.logo_key ? 'Replace logo' : 'Upload logo'}
+                      <input
+                        type="file"
+                        accept="image/png,image/jpeg,image/webp"
+                        className="hidden"
+                        disabled={logoBusy}
+                        onChange={(event) => {
+                          const file = event.target.files?.[0];
+                          // Cleared so picking the same file twice still fires.
+                          event.target.value = '';
+                          if (file) void uploadLogo(file);
+                        }}
+                      />
+                    </label>
+                    {editingUni.logo_key && (
+                      <button
+                        type="button"
+                        onClick={() => void removeLogo()}
+                        disabled={logoBusy}
+                        className="inline-flex items-center gap-2 rounded-xl border border-rose-900/50 bg-rose-950/20 px-3 py-2 text-xs font-semibold text-rose-300 hover:bg-rose-950/50 disabled:opacity-50"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                        Remove
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              <div>
+                <label className="text-xs font-semibold text-slate-300">Monogram colour</label>
+                <p className="mt-1 text-xs text-slate-500">
+                  Used wherever there is no logo. Saved with the details below.
+                </p>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {MONOGRAM_THEMES.map((theme) => (
+                    <button
+                      key={theme.value}
+                      type="button"
+                      title={theme.label}
+                      aria-label={theme.label}
+                      aria-pressed={editColor === theme.value}
+                      onClick={() => setEditColor(theme.value)}
+                      style={{ backgroundImage: SWATCHES[theme.value] }}
+                      className={`h-9 w-9 rounded-xl ring-offset-2 ring-offset-slate-900 transition ${
+                        editColor === theme.value ? 'ring-2 ring-white' : 'ring-1 ring-slate-700'
+                      }`}
+                    />
+                  ))}
+                </div>
               </div>
             </div>
 

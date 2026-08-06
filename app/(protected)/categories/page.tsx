@@ -28,6 +28,12 @@ interface DbCategory {
 
 const EMPTY_DRAFT = { name: '', icon: '', description: '' };
 
+/**
+ * The delete RPCs require a reason and record it in admin_audit_log. Admins are
+ * not asked to type one, so this is what the audit trail carries.
+ */
+const AUDIT_REASON = 'Deleted from the admin console';
+
 export default function CategoriesAdminPage() {
   const [categories, setCategories] = useState<DbCategory[]>([]);
   const [loading, setLoading] = useState(true);
@@ -108,14 +114,12 @@ export default function CategoriesAdminPage() {
   };
 
   const handleDelete = async (category: DbCategory) => {
-    const reason = window.prompt(`Why are you deleting "${category.name}"?`)?.trim();
-    if (!reason) return;
     if (!window.confirm(`Delete "${category.name}"? This is audited and cannot be undone.`)) return;
 
     await run(`Deleted "${category.name}".`, () =>
       supabase.rpc('delete_category_admin', {
         p_category_id: category.id,
-        p_reason: reason,
+        p_reason: AUDIT_REASON,
         p_request_id: crypto.randomUUID(),
       }),
     );

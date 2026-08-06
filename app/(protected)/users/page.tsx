@@ -34,6 +34,13 @@ interface ManagedUser {
   total_count: number;
 }
 
+/**
+ * admin_set_account_status requires a reason and records it in the audit log.
+ * Admins are not asked to type one for deletion. Suspension still asks, because
+ * that reason is shown as feedback rather than being an audit stamp.
+ */
+const ACCOUNT_DELETE_REASON = 'Account deleted from the admin console';
+
 export default function UsersAdminPage() {
   const [users, setUsers] = useState<ManagedUser[]>([]);
   const [queryInput, setQueryInput] = useState('');
@@ -122,12 +129,13 @@ export default function UsersAdminPage() {
   };
 
   const scheduleDeletion = async (user: ManagedUser) => {
-    const reason = window.prompt(`Enter the account-deletion reason for "${user.full_name}":`)?.trim() || '';
-    if (!reason) return;
-    const confirmation = window.prompt(
-      `This blocks access immediately and schedules private data erasure after the 30-day recovery hold. Approved public resources are retained anonymously. Type DELETE to continue.`,
-    );
-    if (confirmation !== 'DELETE') return;
+    if (
+      !window.confirm(
+        `Delete "${user.full_name}"? This blocks access immediately and schedules private data erasure after the 30-day recovery hold. Approved public resources are retained anonymously.`,
+      )
+    ) {
+      return;
+    }
     setBusyId(user.id);
     setError('');
     setMessage('');
@@ -135,7 +143,7 @@ export default function UsersAdminPage() {
     const { error: mutationError } = await supabase.rpc('admin_set_account_status', {
       target_user_id: user.id,
       new_status: 'deleted',
-      reason,
+      reason: ACCOUNT_DELETE_REASON,
       operation_request_id: requestId,
     });
     if (mutationError) setError(`Account deletion could not be scheduled: ${mutationError.message}`);

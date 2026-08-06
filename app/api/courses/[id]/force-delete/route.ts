@@ -19,11 +19,13 @@ import { isTrustedAdminMutationOrigin } from '@/lib/request-security';
 const MAX_DOCUMENTS_PER_REQUEST = 50;
 
 const idSchema = z.string().uuid();
-const bodySchema = z.object({
-  reason: z.string().trim().min(3).max(500),
-  /** Typed confirmation - must equal the course code. */
-  confirm: z.string().trim().min(1),
-});
+
+/**
+ * The delete RPCs require a reason and write it to admin_audit_log. Admins no
+ * longer type one, so the server supplies it - the audit trail stays complete
+ * without putting a text box in front of a confirm dialog.
+ */
+const AUDIT_REASON = 'Force deleted from the admin console';
 
 function response(status: number, body: Record<string, unknown>, requestId: string) {
   return NextResponse.json(
@@ -41,11 +43,6 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   if (!idSchema.safeParse(id).success) {
     return response(400, { error: { code: 'INVALID_COURSE', message: 'Course identifier is invalid.' } }, requestId);
   }
-  const parsed = bodySchema.safeParse(await request.json().catch(() => null));
-  if (!parsed.success) {
-    return response(400, { error: { code: 'INVALID_REQUEST', message: 'A deletion reason and a typed confirmation are required.' } }, requestId);
-  }
-
   const supabase = await createServerSupabaseClient();
   const [{ data: { user } }, { data: isAdmin }] = await Promise.all([
     supabase.auth.getUser(),
@@ -61,12 +58,6 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     .maybeSingle();
   if (courseError) return response(500, { error: { code: 'COURSE_LOOKUP_FAILED', message: courseError.message } }, requestId);
   if (!course) return response(404, { error: { code: 'COURSE_NOT_FOUND', message: 'Course not found.' } }, requestId);
-
-  // Checked server-side too: the client can be bypassed, and this is the last
-  // gate before documents are destroyed.
-  if (parsed.data.confirm !== course.code) {
-    return response(400, { error: { code: 'CONFIRMATION_MISMATCH', message: `Type the course code ${course.code} to confirm.` } }, requestId);
-  }
 
   const { count: totalLinked, error: countError } = await supabase
     .from('resources')
@@ -87,7 +78,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     // Sequential on purpose: each iteration deletes an object from R2 and
     // writes audit rows, and a burst of parallel deletes would make a partial
     // failure much harder to read back.
-    const result = await permanentlyDeleteResource(supabase, blocker.id, parsed.data.reason, requestId);
+    const result = await permanentlyDeleteResource(supabase, blocker.id, AUDIT_REASON, requestId);
     documents.push({
       id: blocker.id,
       title: blocker.title,
@@ -118,7 +109,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
 
   const { error: deleteError } = await supabase.rpc('delete_course_admin', {
     p_course_id: id,
-    p_reason: parsed.data.reason,
+    p_reason: AUDIT_REASON,
     p_request_id: requestId,
   });
   if (deleteError) {

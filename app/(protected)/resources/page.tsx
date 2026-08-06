@@ -55,6 +55,13 @@ function relationText(value: RelationValue, key: string, fallback: string) {
   return typeof item === 'string' && item.trim() ? item : fallback;
 }
 
+/**
+ * The delete route requires a reason and records it in admin_audit_log. Admins
+ * are not asked to type one, so this is what the audit trail carries. Moderation
+ * rejections still ask, because that reason is feedback about the document.
+ */
+const PERMANENT_DELETE_REASON = 'Permanently deleted from the admin console';
+
 const statusStyles: Record<ResourceStatus, string> = {
   pending: 'border-amber-500/20 bg-amber-500/10 text-amber-300',
   approved: 'border-emerald-500/20 bg-emerald-500/10 text-emerald-300',
@@ -238,17 +245,20 @@ export default function ResourceModerationAdminPage() {
   };
 
   const permanentlyDelete = async (resource: ResourceItem) => {
-    const reason = window.prompt(`Enter the permanent deletion reason for “${resource.title}”:`)?.trim();
-    if (!reason) return;
-    const confirmation = window.prompt(`This deletes the R2 object and database record. Type DELETE to confirm:`);
-    if (confirmation !== 'DELETE') return;
+    if (
+      !window.confirm(
+        `Permanently delete “${resource.title}”? The stored file goes too. This cannot be undone.`,
+      )
+    ) {
+      return;
+    }
     setBusyId(resource.id);
     setError('');
     setMessage('');
     const result = await fetch(`/api/resources/${resource.id}/delete`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ reason }),
+      body: JSON.stringify({ reason: PERMANENT_DELETE_REASON }),
     });
     const payload = await result.json().catch(() => null);
     if (!result.ok && result.status !== 202) {

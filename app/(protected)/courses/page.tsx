@@ -53,6 +53,12 @@ function relationText(value: unknown, key: string, fallback: string) {
   return typeof text === 'string' && text.trim() ? text : fallback;
 }
 
+/**
+ * The delete RPCs require a reason and record it in admin_audit_log. Admins are
+ * not asked to type one, so this is what the audit trail carries.
+ */
+const AUDIT_REASON = 'Deleted from the admin console';
+
 function formatBytes(bytes: number | null) {
   if (!bytes || bytes < 0) return '—';
   if (bytes < 1024) return `${bytes} B`;
@@ -94,8 +100,6 @@ export default function CoursesAdminPage() {
   const [blockers, setBlockers] = useState<BlockingResource[]>([]);
   const [blockerTotal, setBlockerTotal] = useState(0);
   const [blockersLoading, setBlockersLoading] = useState(false);
-  const [forceReason, setForceReason] = useState('');
-  const [forceConfirm, setForceConfirm] = useState('');
   const [forcing, setForcing] = useState(false);
   const [forceReport, setForceReport] = useState<ForceDeleteReport | null>(null);
 
@@ -327,24 +331,20 @@ export default function CoursesAdminPage() {
       setBlockers([]);
       setBlockerTotal(0);
       setForceReport(null);
-      setForceReason('');
-      setForceConfirm('');
       await loadBlockers(course);
     },
     [loadBlockers],
   );
 
   const handleDelete = async (course: DbCourse) => {
-    const reason = window.prompt(`Why are you deleting “${course.code} — ${course.title}”?`)?.trim();
-    if (!reason) return;
-    if (!window.confirm(`Delete “${course.code}”? This is audited and cannot be undone.`)) return;
+    if (!window.confirm(`Delete “${course.code} — ${course.title}”? This is audited and cannot be undone.`)) return;
 
     setError('');
     setMessage('');
     const requestId = crypto.randomUUID();
     const { error: deleteError } = await supabase.rpc('delete_course_admin', {
       p_course_id: course.id,
-      p_reason: reason,
+      p_reason: AUDIT_REASON,
       p_request_id: requestId,
     });
     // 23503 is the RPC refusing because documents still reference the course.
@@ -363,6 +363,14 @@ export default function CoursesAdminPage() {
 
   const handleForceDelete = async () => {
     if (!blockerCourse) return;
+    if (
+      !window.confirm(
+        `Permanently delete ${blockerTotal} document${blockerTotal === 1 ? '' : 's'} and the course “${blockerCourse.code}”? The stored files go too. This cannot be undone.`,
+      )
+    ) {
+      return;
+    }
+
     setForcing(true);
     setError('');
     setMessage('');
@@ -372,7 +380,7 @@ export default function CoursesAdminPage() {
       const result = await fetch(`/api/courses/${blockerCourse.id}/force-delete`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ reason: forceReason.trim(), confirm: forceConfirm.trim() }),
+        body: JSON.stringify({}),
       });
       const payload = await result.json().catch(() => null);
 
@@ -863,36 +871,9 @@ export default function CoursesAdminPage() {
                     {blockerTotal > 50 && ' Up to 50 documents are handled per run.'}
                   </p>
 
-                  <div className="mt-4 grid gap-3 sm:grid-cols-2">
-                    <label className="block">
-                      <span className="text-xs font-semibold text-slate-300">Reason (audited)</span>
-                      <input
-                        value={forceReason}
-                        onChange={(event) => setForceReason(event.target.value)}
-                        placeholder="Why is this being destroyed?"
-                        className="admin-input mt-1 w-full"
-                      />
-                    </label>
-                    <label className="block">
-                      <span className="text-xs font-semibold text-slate-300">
-                        Type <span className="font-mono text-white">{blockerCourse.code}</span> to confirm
-                      </span>
-                      <input
-                        value={forceConfirm}
-                        onChange={(event) => setForceConfirm(event.target.value)}
-                        placeholder={blockerCourse.code}
-                        className="admin-input mt-1 w-full"
-                      />
-                    </label>
-                  </div>
-
                   <button
                     onClick={() => void handleForceDelete()}
-                    disabled={
-                      forcing ||
-                      forceReason.trim().length < 3 ||
-                      forceConfirm.trim() !== blockerCourse.code
-                    }
+                    disabled={forcing}
                     className="mt-4 inline-flex items-center gap-2 rounded-xl bg-rose-600 px-5 py-2 text-sm font-semibold text-white hover:bg-rose-500 disabled:cursor-not-allowed disabled:opacity-40"
                   >
                     {forcing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
