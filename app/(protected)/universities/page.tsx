@@ -2,7 +2,8 @@
 
 import { useCallback, useState, useEffect } from 'react';
 import { supabase } from '@/lib/supabase';
-import { Building2, GitMerge, Check, AlertCircle, ChevronLeft, ChevronRight, Edit3, Loader2, Plus, Trash2, X, XCircle, Search } from 'lucide-react';
+import { Building2, GitMerge, Check, AlertCircle, ChevronLeft, ChevronRight, Edit3, Layers, Loader2, Plus, Trash2, X, XCircle, Search } from 'lucide-react';
+import { groupBySubject } from '@/lib/subject';
 
 interface University {
   id: string;
@@ -11,6 +12,15 @@ interface University {
   country: string;
   status: 'official' | 'custom_pending';
   created_at: string;
+}
+
+/** A course belonging to an institution, with how many documents reference it. */
+interface LinkedCourse {
+  id: string;
+  code: string;
+  title: string;
+  status: 'official' | 'custom_pending';
+  documentCount: number;
 }
 
 interface UniversityMergePreflight {
@@ -46,6 +56,13 @@ export default function UniversitiesAdminPage() {
   const [editShort, setEditShort] = useState('');
   const [editStatus, setEditStatus] = useState<'official' | 'custom_pending'>('official');
   const [saving, setSaving] = useState(false);
+
+  // Linked courses, grouped by subject
+  const [courseUni, setCourseUni] = useState<University | null>(null);
+  const [linkedCourses, setLinkedCourses] = useState<LinkedCourse[]>([]);
+  const [linkedLoading, setLinkedLoading] = useState(false);
+  const [courseQuery, setCourseQuery] = useState('');
+  const [subjectFilter, setSubjectFilter] = useState('all');
 
   const [creating, setCreating] = useState(false);
   const [newName, setNewName] = useState('');
@@ -136,6 +153,37 @@ export default function UniversitiesAdminPage() {
   useEffect(() => {
     void loadUniversities();
   }, [loadUniversities]);
+
+  const openLinkedCourses = useCallback(async (university: University) => {
+    setCourseUni(university);
+    setLinkedCourses([]);
+    setCourseQuery('');
+    setSubjectFilter('all');
+    setLinkedLoading(true);
+
+    // resources(count) is an embedded aggregate over the course_id foreign key,
+    // which avoids a second round trip per course just to show its document count.
+    const { data, error: coursesError } = await supabase
+      .from('courses')
+      .select('id, code, title, status, resources(count)')
+      .eq('university_id', university.id)
+      .order('code');
+
+    if (coursesError) {
+      setError(`Courses could not be loaded: ${coursesError.message}`);
+    } else {
+      setLinkedCourses(
+        (data ?? []).map((row: any) => ({
+          id: row.id,
+          code: row.code,
+          title: row.title,
+          status: row.status,
+          documentCount: Array.isArray(row.resources) ? (row.resources[0]?.count ?? 0) : 0,
+        })),
+      );
+    }
+    setLinkedLoading(false);
+  }, []);
 
   const handleExecuteMerge = async () => {
     if (!sourceUni || !targetUniId || !preflight) return;
@@ -418,6 +466,14 @@ export default function UniversitiesAdminPage() {
                       Edit
                     </button>
                     <button
+                      onClick={() => void openLinkedCourses(u)}
+                      title="See this institution's courses grouped by subject"
+                      className="inline-flex items-center gap-1 rounded-lg border border-slate-700 bg-slate-800 px-3 py-1.5 text-xs font-medium hover:bg-slate-700"
+                    >
+                      <Layers className="h-3.5 w-3.5" />
+                      Linked courses
+                    </button>
+                    <button
                       onClick={() => { setSourceUni(u); setTargetQuery(''); }}
                       className="inline-flex items-center gap-1 rounded-lg border border-indigo-700/50 bg-indigo-950/40 px-3 py-1.5 text-xs font-medium text-indigo-300 hover:bg-indigo-900/60"
                     >
@@ -525,6 +581,145 @@ export default function UniversitiesAdminPage() {
           </div>
         </div>
       )}
+
+      {/* Linked courses, grouped by subject */}
+      {courseUni && (() => {
+        const needle = courseQuery.trim().toLowerCase();
+        const matching = linkedCourses.filter(
+          (course) =>
+            !needle ||
+            course.code.toLowerCase().includes(needle) ||
+            course.title.toLowerCase().includes(needle),
+        );
+        const groups = groupBySubject(matching, (course) => course.code).filter(
+          (group) => subjectFilter === 'all' || group.code === subjectFilter,
+        );
+        // Built from every course, not the filtered set, so choosing a subject
+        // does not empty the list you chose it from.
+        const allSubjects = groupBySubject(linkedCourses, (course) => course.code);
+        const shownCount = groups.reduce((sum, group) => sum + group.items.length, 0);
+
+        return (
+          <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/80 p-4 backdrop-blur-sm">
+            <div className="my-8 w-full max-w-3xl rounded-2xl border border-slate-800 bg-slate-900 p-6 shadow-2xl">
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <h3 className="flex items-center gap-2 text-xl font-bold text-white">
+                    <Layers className="h-5 w-5 text-indigo-400" />
+                    Courses at {courseUni.short}
+                  </h3>
+                  <p className="mt-1 text-sm text-slate-400">
+                    {courseUni.name} — {linkedCourses.length} course
+                    {linkedCourses.length === 1 ? '' : 's'} across {allSubjects.length} subject
+                    {allSubjects.length === 1 ? '' : 's'}.
+                  </p>
+                </div>
+                <button
+                  onClick={() => setCourseUni(null)}
+                  aria-label="Close"
+                  className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-800 hover:text-white"
+                >
+                  <X className="h-5 w-5" />
+                </button>
+              </div>
+
+              <div className="mt-5 flex flex-col gap-3 sm:flex-row">
+                <label className="relative flex-1">
+                  <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
+                  <input
+                    value={courseQuery}
+                    onChange={(event) => setCourseQuery(event.target.value)}
+                    type="search"
+                    placeholder="Search course code or title"
+                    className="admin-input w-full pl-9"
+                  />
+                </label>
+                <select
+                  value={subjectFilter}
+                  onChange={(event) => setSubjectFilter(event.target.value)}
+                  aria-label="Filter by subject"
+                  className="admin-input sm:max-w-xs"
+                >
+                  <option value="all">All subjects</option>
+                  {allSubjects.map((group) => (
+                    <option key={group.code} value={group.code}>
+                      {group.name} ({group.items.length})
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {linkedLoading ? (
+                <div className="mt-6 flex items-center gap-2 rounded-xl border border-slate-800 bg-slate-950 p-6 text-sm text-slate-400">
+                  <Loader2 className="h-4 w-4 animate-spin text-indigo-400" />
+                  Loading courses…
+                </div>
+              ) : groups.length === 0 ? (
+                <p className="mt-6 rounded-xl border border-slate-800 bg-slate-950 p-6 text-center text-sm text-slate-500">
+                  {linkedCourses.length === 0
+                    ? 'This institution has no courses yet.'
+                    : 'No courses match those filters.'}
+                </p>
+              ) : (
+                <div className="mt-5 space-y-4">
+                  {groups.map((group) => (
+                    <section key={group.code} className="rounded-xl border border-slate-800 bg-slate-950">
+                      <header className="flex items-center justify-between gap-3 border-b border-slate-800 px-4 py-3">
+                        <div className="flex items-center gap-2">
+                          <span className="rounded-md bg-indigo-500/10 px-2 py-0.5 font-mono text-xs font-bold text-indigo-300">
+                            {group.code}
+                          </span>
+                          <span className="text-sm font-semibold text-white">{group.name}</span>
+                        </div>
+                        <span className="text-xs text-slate-500">
+                          {group.items.length} course{group.items.length === 1 ? '' : 's'}
+                        </span>
+                      </header>
+                      <ul className="divide-y divide-slate-800/60">
+                        {group.items.map((course) => (
+                          <li
+                            key={course.id}
+                            className="flex flex-wrap items-center justify-between gap-2 px-4 py-2.5"
+                          >
+                            <div className="min-w-0">
+                              <span className="font-mono text-xs font-bold text-indigo-400">
+                                {course.code}
+                              </span>
+                              <span className="ml-2 text-sm text-white">{course.title}</span>
+                            </div>
+                            <div className="flex shrink-0 items-center gap-2">
+                              {course.status === 'custom_pending' && (
+                                <span className="rounded-full border border-amber-500/20 bg-amber-500/10 px-2 py-0.5 text-[10px] font-semibold text-amber-400">
+                                  Pending
+                                </span>
+                              )}
+                              <span className="rounded-full border border-slate-700 px-2 py-0.5 text-xs text-slate-400">
+                                {course.documentCount} doc{course.documentCount === 1 ? '' : 's'}
+                              </span>
+                            </div>
+                          </li>
+                        ))}
+                      </ul>
+                    </section>
+                  ))}
+                </div>
+              )}
+
+              <div className="mt-6 flex items-center justify-between gap-3">
+                <p className="text-xs text-slate-500">
+                  Showing {shownCount} of {linkedCourses.length} courses.
+                </p>
+                <button
+                  onClick={() => setCourseUni(null)}
+                  className="rounded-xl px-4 py-2 text-sm font-medium text-slate-400 hover:bg-slate-800"
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Edit Modal Dialog */}
       {editingUni && (

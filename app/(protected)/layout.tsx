@@ -4,6 +4,7 @@ import {
   BookOpen,
   Building2,
   FileCheck,
+  HardDrive,
   LayoutDashboard,
   ShieldCheck,
   Tag,
@@ -70,6 +71,10 @@ export default async function ProtectedLayout({ children }: { children: React.Re
             <Link href="/categories" className="admin-nav-link">
               <Tag className="h-4 w-4" />
               Document Categories
+            </Link>
+            <Link href="/documents" className="admin-nav-link">
+              <HardDrive className="h-4 w-4" />
+              All Documents
             </Link>
             <Link href="/resources" className="admin-nav-link">
               <FileCheck className="h-4 w-4" />

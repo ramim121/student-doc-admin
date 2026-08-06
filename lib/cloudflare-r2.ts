@@ -1,5 +1,10 @@
 import 'server-only';
-import { DeleteObjectCommand, GetObjectCommand, S3Client } from '@aws-sdk/client-s3';
+import {
+  DeleteObjectCommand,
+  GetObjectCommand,
+  ListObjectsV2Command,
+  S3Client,
+} from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 
 function getR2Config() {
@@ -23,6 +28,38 @@ function getR2Config() {
 export async function deleteR2Object(storageKey: string) {
   const { client, bucketName } = getR2Config();
   await client.send(new DeleteObjectCommand({ Bucket: bucketName, Key: storageKey }));
+}
+
+export type R2Object = {
+  key: string;
+  size: number;
+  /** ISO-8601 UTC, or null when the provider omits it. */
+  lastModified: string | null;
+};
+
+/**
+ * One page of bucket contents. The caller loops on the returned token, so a
+ * bucket larger than a single response is still walked in full rather than
+ * silently truncated at 1000 keys.
+ */
+export async function listR2Objects(options: { continuationToken?: string; pageSize?: number } = {}) {
+  const { client, bucketName } = getR2Config();
+  const result = await client.send(
+    new ListObjectsV2Command({
+      Bucket: bucketName,
+      ContinuationToken: options.continuationToken,
+      MaxKeys: Math.min(options.pageSize ?? 1000, 1000),
+    }),
+  );
+
+  return {
+    objects: (result.Contents ?? []).map((entry) => ({
+      key: entry.Key ?? '',
+      size: entry.Size ?? 0,
+      lastModified: entry.LastModified ? entry.LastModified.toISOString() : null,
+    })).filter((entry) => entry.key),
+    nextToken: result.IsTruncated ? result.NextContinuationToken ?? null : null,
+  };
 }
 
 export async function getR2ReviewDownloadUrl(storageKey: string, fileName: string) {

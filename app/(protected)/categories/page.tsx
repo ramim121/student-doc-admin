@@ -5,6 +5,7 @@ import {
   AlertCircle,
   Check,
   Edit3,
+  FileText,
   GitMerge,
   Loader2,
   Plus,
@@ -13,6 +14,7 @@ import {
   Trash2,
   X,
 } from 'lucide-react';
+import { LinkedDocuments } from '@/components/linked-documents';
 import { supabase } from '@/lib/supabase';
 
 interface DbCategory {
@@ -42,6 +44,8 @@ export default function CategoriesAdminPage() {
 
   const [mergeSource, setMergeSource] = useState<DbCategory | null>(null);
   const [mergeTargetId, setMergeTargetId] = useState('');
+
+  const [inspecting, setInspecting] = useState<DbCategory | null>(null);
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -354,6 +358,14 @@ export default function CategoriesAdminPage() {
 
                     <div className="flex shrink-0 flex-wrap gap-2">
                       <button
+                        onClick={() => setInspecting(category)}
+                        title="See every document in this category, across all courses and institutions"
+                        className="inline-flex items-center gap-1.5 rounded-lg border border-slate-700 px-3 py-1.5 text-xs font-medium text-slate-300 hover:bg-slate-800"
+                      >
+                        <FileText className="h-3.5 w-3.5" />
+                        Linked docs
+                      </button>
+                      <button
                         onClick={() => {
                           setEditing(category);
                           setEditDraft({
@@ -398,6 +410,47 @@ export default function CategoriesAdminPage() {
           </div>
         )}
       </div>
+
+      {/* Documents in this category, across every course and institution */}
+      {inspecting && (
+        <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/80 p-4 backdrop-blur-sm">
+          <div className="my-8 w-full max-w-5xl rounded-2xl border border-slate-800 bg-slate-900 p-6 shadow-2xl">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <h3 className="flex items-center gap-2 text-xl font-bold text-white">
+                  <FileText className="h-5 w-5 text-indigo-400" />
+                  Documents in {inspecting.name}
+                </h3>
+                <p className="mt-1 text-sm text-slate-400">
+                  Every document with this category, whatever its course or institution.
+                  {inspecting.resource_count > 0 &&
+                    ` ${inspecting.resource_count} in total.`}
+                </p>
+              </div>
+              <button
+                onClick={() => setInspecting(null)}
+                aria-label="Close"
+                className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-800 hover:text-white"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            <div className="mt-5">
+              <LinkedDocuments scope={{ column: 'category_id', value: inspecting.id }} />
+            </div>
+
+            <div className="mt-6 flex justify-end">
+              <button
+                onClick={() => setInspecting(null)}
+                className="rounded-xl px-4 py-2 text-sm font-medium text-slate-400 hover:bg-slate-800"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
