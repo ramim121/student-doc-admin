@@ -15,7 +15,7 @@ import {
 } from 'lucide-react';
 import { StatusPill, formatBytes } from '@/components/linked-documents';
 import { supabase } from '@/lib/supabase';
-import { UNCODED, subjectCode, subjectName } from '@/lib/subject';
+import { subjectCode, subjectName, subjectOptions } from '@/lib/subject';
 
 /**
  * Every stored document, whatever its moderation state. The moderation queue
@@ -113,13 +113,7 @@ export default function DocumentsAdminPage() {
 
   // Subjects are derived from course codes, so the list reflects the catalogue
   // rather than being hard-coded.
-  const subjects = useMemo(() => {
-    const codes = new Set(courseCodes.map((code) => subjectCode(code)));
-    return Array.from(codes)
-      .filter((code) => code !== UNCODED)
-      .map((code) => ({ code, name: subjectName(code) }))
-      .sort((a, b) => a.name.localeCompare(b.name));
-  }, [courseCodes]);
+  const subjects = useMemo(() => subjectOptions(courseCodes), [courseCodes]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -391,7 +385,7 @@ export default function DocumentsAdminPage() {
           >
             <option value="all">All subjects</option>
             {subjects.map((subject) => (
-              <option key={subject.code} value={subject.code}>{subject.name}</option>
+              <option key={subject.code} value={subject.code}>{subject.label}</option>
             ))}
           </select>
           <select

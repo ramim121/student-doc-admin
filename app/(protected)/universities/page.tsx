@@ -641,11 +641,18 @@ export default function UniversitiesAdminPage() {
                   className="admin-input sm:max-w-xs"
                 >
                   <option value="all">All subjects</option>
-                  {allSubjects.map((group) => (
-                    <option key={group.code} value={group.code}>
-                      {group.name} ({group.items.length})
-                    </option>
-                  ))}
+                  {allSubjects.map((group) => {
+                    // CS and INFK both read as "Computer Science"; show the code
+                    // when a name is not unique so the two options differ.
+                    const ambiguous =
+                      allSubjects.filter((other) => other.name === group.name).length > 1;
+                    return (
+                      <option key={group.code} value={group.code}>
+                        {ambiguous ? `${group.name} (${group.code})` : group.name} (
+                        {group.items.length})
+                      </option>
+                    );
+                  })}
                 </select>
               </div>
 

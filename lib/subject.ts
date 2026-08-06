@@ -56,6 +56,34 @@ export function subjectName(code: string): string {
   return SUBJECT_NAMES[code] ?? code;
 }
 
+/**
+ * Filter options for a set of course codes. Distinct prefixes can share a
+ * display name - CS and INFK are both Computer Science - which produced two
+ * identical-looking entries in a dropdown. Colliding names carry their code so
+ * the two are tellable apart; unique ones stay clean.
+ */
+export function subjectOptions(courseCodes: Array<string | null | undefined>) {
+  const codes = Array.from(new Set(courseCodes.map((code) => subjectCode(code)))).filter(
+    (code) => code !== UNCODED,
+  );
+
+  const nameCounts = new Map<string, number>();
+  for (const code of codes) {
+    const name = subjectName(code);
+    nameCounts.set(name, (nameCounts.get(name) ?? 0) + 1);
+  }
+
+  return codes
+    .map((code) => {
+      const name = subjectName(code);
+      return {
+        code,
+        label: (nameCounts.get(name) ?? 0) > 1 ? `${name} (${code})` : name,
+      };
+    })
+    .sort((a, b) => a.label.localeCompare(b.label));
+}
+
 export type SubjectGroup<T> = {
   code: string;
   name: string;

@@ -1,6 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { UNCODED, groupBySubject, subjectCode, subjectName } from '../lib/subject';
+import {
+  UNCODED,
+  groupBySubject,
+  subjectCode,
+  subjectName,
+  subjectOptions,
+} from '../lib/subject';
 
 test('the subject is the leading letters of the course code', () => {
   assert.equal(subjectCode('CS-101'), 'CS');
@@ -50,4 +56,30 @@ test('grouping buckets every course and keeps uncoded last', () => {
 
 test('grouping an empty list yields no groups', () => {
   assert.deepEqual(groupBySubject([], () => 'CS-101'), []);
+});
+
+test('filter options disambiguate prefixes that share a display name', () => {
+  // CS and INFK both read as Computer Science, which put two identical
+  // entries in the dropdown with no way to tell which was which.
+  const options = subjectOptions(['CS-101', 'INFK-252', 'EE-224']);
+
+  assert.deepEqual(
+    options,
+    [
+      { code: 'CS', label: 'Computer Science (CS)' },
+      { code: 'INFK', label: 'Computer Science (INFK)' },
+      { code: 'EE', label: 'Electrical Engineering' },
+    ],
+    'colliding names carry their code, unique ones stay clean',
+  );
+  assert.equal(
+    new Set(options.map((option) => option.label)).size,
+    options.length,
+    'every label must be distinct',
+  );
+});
+
+test('filter options drop duplicates and uncoded courses', () => {
+  const options = subjectOptions(['CS-101', 'CS-229', '18-06', null, '']);
+  assert.deepEqual(options, [{ code: 'CS', label: 'Computer Science' }]);
 });
