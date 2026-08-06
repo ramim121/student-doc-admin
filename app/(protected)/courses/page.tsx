@@ -2,7 +2,7 @@
 
 import { useCallback, useState, useEffect } from 'react';
 import { supabase } from '@/lib/supabase';
-import { BookOpen, GitMerge, Check, AlertCircle, ChevronLeft, ChevronRight, Edit3, Loader2, Plus, Trash2, X, XCircle, Search } from 'lucide-react';
+import { BookOpen, GitMerge, Check, AlertCircle, ChevronLeft, ChevronRight, Edit3, ExternalLink, FileText, Loader2, Plus, ShieldAlert, Trash2, X, XCircle, Search } from 'lucide-react';
 
 interface DbCourse {
   id: string;
@@ -23,6 +23,41 @@ interface CourseMergePreflight {
   sourceCode: string;
   targetCode: string;
   affectedResources: number;
+}
+
+/** A document that references the course, and so blocks deleting it. */
+interface BlockingResource {
+  id: string;
+  title: string;
+  status: string;
+  file_type: string | null;
+  size_bytes: number | null;
+  downloads: number | null;
+  views: number | null;
+  created_at: string;
+  uploader: string;
+}
+
+interface ForceDeleteReport {
+  status: 'deleted' | 'partial' | 'documents_deleted_course_kept';
+  deletedCount: number;
+  remaining?: number;
+  message?: string;
+  documents: Array<{ id: string; title: string; outcome: string; message?: string }>;
+}
+
+/** Supabase returns an embedded row as an object or a single-element array. */
+function relationText(value: unknown, key: string, fallback: string) {
+  const row = Array.isArray(value) ? value[0] : value;
+  const text = row && typeof row === 'object' ? (row as Record<string, unknown>)[key] : null;
+  return typeof text === 'string' && text.trim() ? text : fallback;
+}
+
+function formatBytes(bytes: number | null) {
+  if (!bytes || bytes < 0) return '—';
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 export default function CoursesAdminPage() {
@@ -53,6 +88,16 @@ export default function CoursesAdminPage() {
   const [newCode, setNewCode] = useState('');
   const [newTitle, setNewTitle] = useState('');
   const [newDesc, setNewDesc] = useState('');
+
+  // Blocking-document inspector and force delete
+  const [blockerCourse, setBlockerCourse] = useState<DbCourse | null>(null);
+  const [blockers, setBlockers] = useState<BlockingResource[]>([]);
+  const [blockerTotal, setBlockerTotal] = useState(0);
+  const [blockersLoading, setBlockersLoading] = useState(false);
+  const [forceReason, setForceReason] = useState('');
+  const [forceConfirm, setForceConfirm] = useState('');
+  const [forcing, setForcing] = useState(false);
+  const [forceReport, setForceReport] = useState<ForceDeleteReport | null>(null);
 
   // Edit state
   const [editingCourse, setEditingCourse] = useState<DbCourse | null>(null);
@@ -242,6 +287,53 @@ export default function CoursesAdminPage() {
     setSaving(false);
   };
 
+  /** Refreshes the linked-document list without disturbing the force-delete report. */
+  const loadBlockers = useCallback(async (course: DbCourse) => {
+    setBlockersLoading(true);
+    const { data, count, error: blockerError } = await supabase
+      .from('resources')
+      .select(
+        'id, title, status, file_type, size_bytes, downloads, views, created_at, profiles(full_name)',
+        { count: 'exact' },
+      )
+      .eq('course_id', course.id)
+      .order('created_at', { ascending: false })
+      .limit(100);
+
+    if (blockerError) {
+      setError(`Linked documents could not be loaded: ${blockerError.message}`);
+    } else {
+      setBlockers(
+        (data ?? []).map((row: any) => ({
+          id: row.id,
+          title: row.title,
+          status: row.status,
+          file_type: row.file_type,
+          size_bytes: row.size_bytes,
+          downloads: row.downloads,
+          views: row.views,
+          created_at: row.created_at,
+          uploader: relationText(row.profiles, 'full_name', 'Unknown uploader'),
+        })),
+      );
+      setBlockerTotal(count ?? 0);
+    }
+    setBlockersLoading(false);
+  }, []);
+
+  const openBlockers = useCallback(
+    async (course: DbCourse) => {
+      setBlockerCourse(course);
+      setBlockers([]);
+      setBlockerTotal(0);
+      setForceReport(null);
+      setForceReason('');
+      setForceConfirm('');
+      await loadBlockers(course);
+    },
+    [loadBlockers],
+  );
+
   const handleDelete = async (course: DbCourse) => {
     const reason = window.prompt(`Why are you deleting “${course.code} — ${course.title}”?`)?.trim();
     if (!reason) return;
@@ -255,12 +347,57 @@ export default function CoursesAdminPage() {
       p_reason: reason,
       p_request_id: requestId,
     });
-    // The RPC refuses while resources still reference the course, and reports
-    // how many. That message is more useful than a generic failure.
-    if (deleteError) setError(deleteError.message);
-    else {
-      setMessage(`Deleted “${course.code}”. Audit request: ${requestId}`);
+    // 23503 is the RPC refusing because documents still reference the course.
+    // Rather than leaving the admin with a bare count, open the inspector so
+    // they can see exactly which documents, then merge or force delete.
+    if (deleteError) {
+      setError(deleteError.message);
+      if (deleteError.code === '23503' || /still in use/i.test(deleteError.message)) {
+        await openBlockers(course);
+      }
+      return;
+    }
+    setMessage(`Deleted “${course.code}”. Audit request: ${requestId}`);
+    await loadData();
+  };
+
+  const handleForceDelete = async () => {
+    if (!blockerCourse) return;
+    setForcing(true);
+    setError('');
+    setMessage('');
+    setForceReport(null);
+
+    try {
+      const result = await fetch(`/api/courses/${blockerCourse.id}/force-delete`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reason: forceReason.trim(), confirm: forceConfirm.trim() }),
+      });
+      const payload = await result.json().catch(() => null);
+
+      if (!result.ok && result.status !== 202 && result.status !== 409) {
+        setError(payload?.error?.message || 'Force delete failed.');
+        return;
+      }
+
+      setForceReport(payload as ForceDeleteReport);
+      if (payload?.status === 'deleted') {
+        setMessage(
+          `Force deleted “${blockerCourse.code}” and ${payload.deletedCount} document(s). Audit request: ${payload.requestId}`,
+        );
+        setBlockerCourse(null);
+      } else if (payload?.error?.message) {
+        setError(payload.error.message);
+      }
       await loadData();
+      // Refresh the list in place so the admin sees what is left, keeping the
+      // per-document report that explains why anything survived.
+      if (payload?.status !== 'deleted') await loadBlockers(blockerCourse);
+    } catch (err: any) {
+      setError(err?.message || 'Force delete failed.');
+    } finally {
+      setForcing(false);
     }
   };
 
@@ -452,6 +589,14 @@ export default function CoursesAdminPage() {
                       </button>
                     )}
                     <button
+                      onClick={() => void openBlockers(c)}
+                      title="See the documents that reference this course"
+                      className="inline-flex items-center gap-1 rounded-lg border border-slate-700 bg-slate-800 px-3 py-1.5 text-xs font-medium hover:bg-slate-700"
+                    >
+                      <FileText className="h-3.5 w-3.5" />
+                      Linked docs
+                    </button>
+                    <button
                       onClick={() => void handleDelete(c)}
                       title="Delete. Refused while resources still reference this course."
                       className="inline-flex items-center gap-1 rounded-lg border border-rose-900/50 bg-rose-950/20 px-3 py-1.5 text-xs font-medium text-rose-300 hover:bg-rose-950/50"
@@ -585,6 +730,211 @@ export default function CoursesAdminPage() {
                 className="rounded-xl bg-purple-600 px-5 py-2 text-sm font-semibold text-white hover:bg-purple-500"
               >
                 {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Save Course'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Linked documents / force delete */}
+      {blockerCourse && (
+        <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/80 p-4 backdrop-blur-sm">
+          <div className="my-8 w-full max-w-4xl rounded-2xl border border-slate-800 bg-slate-900 p-6 shadow-2xl">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <h3 className="flex items-center gap-2 text-xl font-bold text-white">
+                  <FileText className="h-5 w-5 text-indigo-400" />
+                  Documents linked to {blockerCourse.code}
+                </h3>
+                <p className="mt-1 text-sm text-slate-400">
+                  {blockerCourse.title} · {blockerCourse.university_name}
+                </p>
+              </div>
+              <button
+                onClick={() => setBlockerCourse(null)}
+                aria-label="Close"
+                className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-800 hover:text-white"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            {blockersLoading ? (
+              <div className="mt-6 flex items-center gap-2 rounded-xl border border-slate-800 bg-slate-950 p-6 text-sm text-slate-400">
+                <Loader2 className="h-4 w-4 animate-spin text-indigo-400" />
+                Loading linked documents…
+              </div>
+            ) : blockerTotal === 0 ? (
+              <div className="mt-6 rounded-xl border border-emerald-500/30 bg-emerald-950/20 p-4 text-sm text-emerald-300">
+                Nothing references this course. It can be deleted normally.
+              </div>
+            ) : (
+              <>
+                <p className="mt-4 text-sm text-slate-300">
+                  <span className="font-semibold text-amber-300">{blockerTotal}</span> document
+                  {blockerTotal === 1 ? '' : 's'} reference this course, which is why deleting it is
+                  refused.
+                  {blockerTotal > blockers.length && ` Showing the ${blockers.length} most recent.`}
+                </p>
+
+                <div className="mt-4 overflow-x-auto rounded-xl border border-slate-800">
+                  <table className="w-full min-w-[720px] text-left text-sm text-slate-300">
+                    <thead className="border-b border-slate-800 bg-slate-900/60 text-xs uppercase text-slate-400">
+                      <tr>
+                        <th className="px-4 py-3">Document</th>
+                        <th className="px-4 py-3">Status</th>
+                        <th className="px-4 py-3">Uploader</th>
+                        <th className="px-4 py-3">Size</th>
+                        <th className="px-4 py-3">Activity</th>
+                        <th className="px-4 py-3">Uploaded</th>
+                        <th className="px-4 py-3 text-right">File</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-800/60">
+                      {blockers.map((doc) => (
+                        <tr key={doc.id} className="hover:bg-slate-900/40">
+                          <td className="px-4 py-3 font-medium text-white">
+                            {doc.title}
+                            {doc.file_type && (
+                              <span className="ml-2 rounded bg-slate-800 px-1.5 py-0.5 text-[10px] uppercase text-slate-400">
+                                {doc.file_type}
+                              </span>
+                            )}
+                          </td>
+                          <td className="px-4 py-3">
+                            <span className="rounded-full border border-slate-700 bg-slate-800 px-2 py-0.5 text-xs capitalize text-slate-300">
+                              {doc.status}
+                            </span>
+                          </td>
+                          <td className="px-4 py-3 text-xs text-slate-400">{doc.uploader}</td>
+                          <td className="px-4 py-3 text-xs text-slate-400">{formatBytes(doc.size_bytes)}</td>
+                          <td className="px-4 py-3 text-xs text-slate-400">
+                            {doc.downloads ?? 0} downloads · {doc.views ?? 0} views
+                          </td>
+                          <td className="px-4 py-3 text-xs text-slate-400">
+                            {new Date(doc.created_at).toLocaleDateString()}
+                          </td>
+                          <td className="px-4 py-3 text-right">
+                            <a
+                              href={`/api/resources/${doc.id}/file`}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="inline-flex items-center gap-1 rounded-lg border border-sky-700/50 bg-sky-950/30 px-2.5 py-1.5 text-xs text-sky-300 hover:bg-sky-900/50"
+                            >
+                              <ExternalLink className="h-3.5 w-3.5" />
+                              Open
+                            </a>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+
+                <div className="mt-5 rounded-xl border border-slate-700 bg-slate-950 p-4">
+                  <p className="text-sm text-slate-300">
+                    <strong className="text-white">Keep the documents:</strong> merge this course
+                    into another one and every document above moves across.
+                  </p>
+                  <button
+                    onClick={() => {
+                      const course = blockerCourse;
+                      setBlockerCourse(null);
+                      setSourceCourse(course);
+                      setTargetQuery('');
+                    }}
+                    className="mt-3 inline-flex items-center gap-2 rounded-xl border border-purple-700/50 bg-purple-950/40 px-4 py-2 text-sm font-semibold text-purple-300 hover:bg-purple-900/60"
+                  >
+                    <GitMerge className="h-4 w-4" />
+                    Merge into another course
+                  </button>
+                </div>
+
+                <div className="mt-4 rounded-xl border border-rose-800/60 bg-rose-950/20 p-4">
+                  <p className="flex items-center gap-2 text-sm font-semibold text-rose-300">
+                    <ShieldAlert className="h-4 w-4" />
+                    Force delete
+                  </p>
+                  <p className="mt-2 text-sm text-slate-300">
+                    Permanently deletes the {blockerTotal} document
+                    {blockerTotal === 1 ? '' : 's'} above — including the stored file
+                    {blockerTotal === 1 ? '' : 's'} — and then the course. Every removal is audited
+                    individually. This cannot be undone.
+                    {blockerTotal > 50 && ' Up to 50 documents are handled per run.'}
+                  </p>
+
+                  <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                    <label className="block">
+                      <span className="text-xs font-semibold text-slate-300">Reason (audited)</span>
+                      <input
+                        value={forceReason}
+                        onChange={(event) => setForceReason(event.target.value)}
+                        placeholder="Why is this being destroyed?"
+                        className="admin-input mt-1 w-full"
+                      />
+                    </label>
+                    <label className="block">
+                      <span className="text-xs font-semibold text-slate-300">
+                        Type <span className="font-mono text-white">{blockerCourse.code}</span> to confirm
+                      </span>
+                      <input
+                        value={forceConfirm}
+                        onChange={(event) => setForceConfirm(event.target.value)}
+                        placeholder={blockerCourse.code}
+                        className="admin-input mt-1 w-full"
+                      />
+                    </label>
+                  </div>
+
+                  <button
+                    onClick={() => void handleForceDelete()}
+                    disabled={
+                      forcing ||
+                      forceReason.trim().length < 3 ||
+                      forceConfirm.trim() !== blockerCourse.code
+                    }
+                    className="mt-4 inline-flex items-center gap-2 rounded-xl bg-rose-600 px-5 py-2 text-sm font-semibold text-white hover:bg-rose-500 disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    {forcing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
+                    {forcing
+                      ? 'Deleting documents…'
+                      : `Force delete ${blockerTotal} document${blockerTotal === 1 ? '' : 's'} and the course`}
+                  </button>
+                </div>
+              </>
+            )}
+
+            {forceReport && (
+              <div className="mt-4 rounded-xl border border-slate-700 bg-slate-950 p-4 text-sm">
+                <p className="font-semibold text-white">
+                  {forceReport.deletedCount} document{forceReport.deletedCount === 1 ? '' : 's'} deleted
+                  {typeof forceReport.remaining === 'number' && forceReport.remaining > 0
+                    ? `, ${forceReport.remaining} still linked`
+                    : ''}
+                  .
+                </p>
+                {forceReport.message && <p className="mt-1 text-slate-400">{forceReport.message}</p>}
+                {forceReport.documents.some((doc) => doc.outcome !== 'deleted') && (
+                  <ul className="mt-3 space-y-1 text-xs text-rose-300">
+                    {forceReport.documents
+                      .filter((doc) => doc.outcome !== 'deleted')
+                      .map((doc) => (
+                        <li key={doc.id}>
+                          <span className="font-medium">{doc.title}</span> — {doc.outcome}
+                          {doc.message ? `: ${doc.message}` : ''}
+                        </li>
+                      ))}
+                  </ul>
+                )}
+              </div>
+            )}
+
+            <div className="mt-6 flex justify-end">
+              <button
+                onClick={() => setBlockerCourse(null)}
+                className="rounded-xl px-4 py-2 text-sm font-medium text-slate-400 hover:bg-slate-800"
+              >
+                Close
               </button>
             </div>
           </div>
