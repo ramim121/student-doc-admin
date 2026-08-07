@@ -5,6 +5,7 @@ import {
   Building2,
   FileCheck,
   HardDrive,
+  KeyRound,
   LayoutDashboard,
   ShieldCheck,
   Tag,
@@ -100,6 +101,13 @@ export default async function ProtectedLayout({ children }: { children: React.Re
             <p className="mt-1 truncate" title={user.email || undefined}>
               {profile?.full_name || user.email || 'Administrator'}
             </p>
+            <Link
+              href="/account"
+              className="mt-2 inline-flex items-center gap-1.5 text-xs font-medium text-indigo-300 hover:text-indigo-200"
+            >
+              <KeyRound className="h-3.5 w-3.5" />
+              Change password
+            </Link>
             <SignOutButton />
           </div>
         </div>
