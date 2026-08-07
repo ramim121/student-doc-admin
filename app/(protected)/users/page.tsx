@@ -9,6 +9,7 @@ import {
   Search,
   ShieldCheck,
   ShieldOff,
+  Ban,
   Trash2,
 } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
@@ -48,6 +49,13 @@ interface DeletePreflight {
   isSelf: boolean;
 }
 
+interface BannedEmail {
+  email: string;
+  reason: string | null;
+  banned_at: string;
+  has_account: boolean;
+}
+
 interface DeleteReport {
   status: string;
   deletedDocuments: number;
@@ -66,6 +74,10 @@ export default function UsersAdminPage() {
   const [busyId, setBusyId] = useState('');
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
+
+  // Banned addresses
+  const [banned, setBanned] = useState<BannedEmail[]>([]);
+  const [showBanned, setShowBanned] = useState(false);
 
   // Delete confirmation
   const [deleteTarget, setDeleteTarget] = useState<ManagedUser | null>(null);
@@ -123,6 +135,58 @@ export default function UsersAdminPage() {
     setBusyId('');
   };
 
+  const loadBanned = useCallback(async () => {
+    const { data, error: listError } = await supabase.rpc('list_banned_emails_admin');
+    if (!listError) setBanned((data ?? []) as BannedEmail[]);
+  }, []);
+
+  useEffect(() => {
+    void loadBanned();
+  }, [loadBanned]);
+
+  /**
+   * Bans the address, not just the account. Deleting an account frees its email
+   * for immediate re-registration, which is the wrong answer for abuse.
+   */
+  const banUser = async (user: ManagedUser) => {
+    const reason = window.prompt(`Why is ${user.email} being banned? (optional, recorded in the audit log)`);
+    if (reason === null) return;
+    if (!window.confirm(
+      `Ban ${user.email}? They will be signed out immediately, cannot sign in, and cannot register again with this address. Their uploads stay.`,
+    )) return;
+
+    setBusyId(user.id);
+    setError('');
+    setMessage('');
+    const requestId = crypto.randomUUID();
+    const { error: banError } = await supabase.rpc('ban_user_admin', {
+      p_user_id: user.id,
+      p_reason: reason.trim() || null,
+      p_request_id: requestId,
+    });
+    if (banError) setError(`Ban failed: ${banError.message}`);
+    else {
+      setMessage(`${user.email} is banned. They cannot sign in or register with that address.`);
+      await Promise.all([loadUsers(), loadBanned()]);
+    }
+    setBusyId('');
+  };
+
+  const unbanEmail = async (email: string) => {
+    if (!window.confirm(`Lift the ban on ${email}? They will be able to sign in and register again.`)) return;
+    setError('');
+    setMessage('');
+    const { error: unbanError } = await supabase.rpc('unban_email_admin', {
+      p_email: email,
+      p_request_id: crypto.randomUUID(),
+    });
+    if (unbanError) setError(`Unban failed: ${unbanError.message}`);
+    else {
+      setMessage(`${email} is no longer banned.`);
+      await Promise.all([loadUsers(), loadBanned()]);
+    }
+  };
+
   /**
    * Opens the confirmation with a live count of what would be destroyed.
    * Nothing is deleted here - the preflight is read-only.
@@ -177,7 +241,53 @@ export default function UsersAdminPage() {
       <div><h1 className="text-2xl font-bold tracking-tight">Users & Role Administration</h1><p className="mt-1 text-sm text-slate-400">Inspect support-safe account activity, manage administrator membership, and delete accounts.</p></div>
       {message && <div className="rounded-xl border border-emerald-500/30 bg-emerald-950/20 p-4 text-sm text-emerald-300" role="status">{message}</div>}
       {error && <div className="rounded-xl border border-rose-500/30 bg-rose-950/20 p-4 text-sm text-rose-300" role="alert">{error}</div>}
-      <div className="relative max-w-xl"><Search className="absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" /><input type="search" value={queryInput} onChange={(event) => setQueryInput(event.target.value)} placeholder="Search name, email, or university" aria-label="Search users" className="h-11 w-full rounded-xl border border-slate-700 bg-slate-950 pl-10 pr-4 text-sm text-white outline-none focus:border-indigo-500" /></div>
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+        <div className="relative flex-1 max-w-xl"><Search className="absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" /><input type="search" value={queryInput} onChange={(event) => setQueryInput(event.target.value)} placeholder="Search name, email, or university" aria-label="Search users" className="h-11 w-full rounded-xl border border-slate-700 bg-slate-950 pl-10 pr-4 text-sm text-white outline-none focus:border-indigo-500" /></div>
+        <button
+          onClick={() => setShowBanned((open) => !open)}
+          className="inline-flex shrink-0 items-center gap-2 rounded-xl border border-slate-700 bg-slate-900 px-4 py-2.5 text-sm font-medium text-slate-300 hover:bg-slate-800"
+        >
+          <Ban className="h-4 w-4 text-amber-400" />
+          Banned addresses
+          <span className="rounded-full bg-slate-800 px-2 py-0.5 text-xs">{banned.length}</span>
+        </button>
+      </div>
+
+      {showBanned && (
+        <section className="admin-card">
+          <h2 className="flex items-center gap-2 font-semibold text-white">
+            <Ban className="h-4 w-4 text-amber-400" />
+            Banned email addresses
+          </h2>
+          <p className="mt-1 text-sm text-slate-400">
+            These addresses cannot sign in or register, whether or not an account still exists.
+          </p>
+          {banned.length === 0 ? (
+            <p className="mt-4 text-sm text-slate-500">Nothing is banned.</p>
+          ) : (
+            <ul className="mt-4 divide-y divide-slate-800">
+              {banned.map((entry) => (
+                <li key={entry.email} className="flex flex-wrap items-center justify-between gap-3 py-3">
+                  <div className="min-w-0">
+                    <p className="font-medium text-white">{entry.email}</p>
+                    <p className="text-xs text-slate-500">
+                      {new Date(entry.banned_at).toLocaleDateString()}
+                      {entry.reason ? ` · ${entry.reason}` : ''}
+                      {entry.has_account ? ' · account still exists' : ' · account deleted'}
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => void unbanEmail(entry.email)}
+                    className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-emerald-700/50 bg-emerald-950/30 px-3 py-1.5 text-xs text-emerald-300 hover:bg-emerald-900/50"
+                  >
+                    Lift ban
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+      )}
 
       <div className="admin-card overflow-x-auto p-0">
         <table className="w-full min-w-[1000px] text-left text-sm text-slate-300">
@@ -189,7 +299,7 @@ export default function UsersAdminPage() {
                 <td className="px-5 py-4"><div className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-semibold ${user.account_status === 'active' ? 'border-emerald-500/20 bg-emerald-500/10 text-emerald-300' : 'border-rose-500/20 bg-rose-500/10 text-rose-300'}`}>{user.account_status}</div><div className={`mt-2 inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-semibold ${user.role === 'admin' ? 'bg-indigo-500/10 text-indigo-300' : 'bg-slate-800 text-slate-400'}`}>{user.role === 'admin' && <ShieldCheck className="h-3.5 w-3.5" />}{user.role}</div></td>
                 <td className="px-5 py-4 text-xs"><div><span className="font-bold text-white">{user.points}</span> XP</div><div className="mt-1 text-slate-500">{user.uploads} uploads · {user.downloads} downloads</div></td>
                 <td className="px-5 py-4 text-xs text-slate-500">{new Date(user.created_at).toLocaleDateString()}</td>
-                <td className="px-5 py-4 text-right">{busyId === user.id ? <Loader2 className="ml-auto h-5 w-5 animate-spin text-indigo-400" /> : <div className="flex flex-wrap justify-end gap-2"><button onClick={() => void changeRole(user)} className="inline-flex items-center gap-1 rounded-lg border border-indigo-700/50 bg-indigo-950/30 px-3 py-1.5 text-xs text-indigo-300 hover:bg-indigo-900/50">{user.role === 'admin' ? <ShieldOff className="h-3.5 w-3.5" /> : <ShieldCheck className="h-3.5 w-3.5" />}{user.role === 'admin' ? 'Demote' : 'Promote'}</button><button onClick={() => void openDeleteDialog(user)} className="inline-flex items-center gap-1 rounded-lg border border-rose-800/60 bg-rose-950/40 px-3 py-1.5 text-xs text-rose-200 hover:bg-rose-900/60"><Trash2 className="h-3.5 w-3.5" />Delete</button></div>}</td>
+                <td className="px-5 py-4 text-right">{busyId === user.id ? <Loader2 className="ml-auto h-5 w-5 animate-spin text-indigo-400" /> : <div className="flex flex-wrap justify-end gap-2"><button onClick={() => void changeRole(user)} className="inline-flex items-center gap-1 rounded-lg border border-indigo-700/50 bg-indigo-950/30 px-3 py-1.5 text-xs text-indigo-300 hover:bg-indigo-900/50">{user.role === 'admin' ? <ShieldOff className="h-3.5 w-3.5" /> : <ShieldCheck className="h-3.5 w-3.5" />}{user.role === 'admin' ? 'Demote' : 'Promote'}</button><button onClick={() => void banUser(user)} className="inline-flex items-center gap-1 rounded-lg border border-amber-700/50 bg-amber-950/30 px-3 py-1.5 text-xs text-amber-300 hover:bg-amber-900/50"><Ban className="h-3.5 w-3.5" />Ban</button><button onClick={() => void openDeleteDialog(user)} className="inline-flex items-center gap-1 rounded-lg border border-rose-800/60 bg-rose-950/40 px-3 py-1.5 text-xs text-rose-200 hover:bg-rose-900/60"><Trash2 className="h-3.5 w-3.5" />Delete</button></div>}</td>
               </tr>
             ))}
           </tbody>
